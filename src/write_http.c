@@ -57,6 +57,7 @@ struct wh_callback_s
         char *clientcert;
         char *clientkeypass;
         long sslversion;
+
         _Bool store_rates;
 
 #define WH_FORMAT_COMMAND 0
