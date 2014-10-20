@@ -83,6 +83,10 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
   size_t offset = 0;
   int i;
   gauge_t *rates = NULL;
+  int store[3][10];
+  int gauge_offset = 0;
+  int counter_offset = 0;
+  int absolute_offset = 0;
 
   memset (buffer, 0, buffer_size);
 
@@ -104,19 +108,22 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
     offset += ((size_t) status); \
 } while (0)
 
-  BUFFER_ADD ("[");
+#define BUFFER_ADD_KEYVAL(key, value) do { \
+  int status2; \
+  status2 = json_escape_string (buffer, sizeof (buffer), (value)); \
+  if (status2 != 0) \
+    return (status2); \
+  BUFFER_ADD (",\"%s\":%s", (key), buffer); \
+} while (0)
+
   for (i = 0; i < ds->ds_num; i++)
   {
-    if (i > 0)
-      BUFFER_ADD (",");
-
     if (ds->ds[i].type == DS_TYPE_GAUGE)
     {
-      if(isfinite (vl->values[i].gauge))
-        BUFFER_ADD ("%g", vl->values[i].gauge);
-      else
-        BUFFER_ADD ("null");
+      store[0][gauge_offset] = i;
+      gauge_offset++;
     }
+    /*TODO : Figure out what is happening with this block of code
     else if (store_rates)
     {
       if (rates == NULL)
@@ -132,13 +139,18 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
         BUFFER_ADD ("%g", rates[i]);
       else
         BUFFER_ADD ("null");
+    }*/
+    else if (ds->ds[i].type == DS_TYPE_COUNTER) {
+      store[1][counter_offset] = i;
+      counter_offset++;
     }
-    else if (ds->ds[i].type == DS_TYPE_COUNTER)
-      BUFFER_ADD ("%llu", vl->values[i].counter);
-    else if (ds->ds[i].type == DS_TYPE_DERIVE)
-      BUFFER_ADD ("%"PRIi64, vl->values[i].derive);
-    else if (ds->ds[i].type == DS_TYPE_ABSOLUTE)
-      BUFFER_ADD ("%"PRIu64, vl->values[i].absolute);
+    else if (ds->ds[i].type == DS_TYPE_DERIVE) {
+      DEBUG ("Skipping derive data type for now");
+    }
+    else if (ds->ds[i].type == DS_TYPE_ABSOLUTE) {
+      store[2][absolute_offset] = i;
+      absolute_offset++;
+    }
     else
     {
       ERROR ("format_json: Unknown data source type: %i",
@@ -147,177 +159,54 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
       return (-1);
     }
   } /* for ds->ds_num */
-  BUFFER_ADD ("]");
+  
+  if (counter_offset > 0) {
+    BUFFER_ADD ("\"counters\":[");
+    for (i = 0; i < counter_offset; i++) {
+      BUFFER_ADD ("{");
+      BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin);
+      BUFFER_ADD ("\"value\":");
+      BUFFER_ADD ("%llu", vl->values[store[1][i]].counter);
+      BUFFER_ADD ("},");
+    }
+    BUFFER_ADD ("]");
+  }
+  
+  if (gauge_offset > 0) {
+    BUFFER_ADD (",\"gauges\":[");
+    for (i = 0; i < gauge_offset; i++) {
+      BUFFER_ADD ("{");
+      BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin);
+      BUFFER_ADD ("\"value\":");
+      if(isfinite (vl->values[store[0][i]].gauge)) {
+        BUFFER_ADD ("%g", vl->values[i].gauge);
+      }
+      else
+        BUFFER_ADD ("null");
+      BUFFER_ADD ("},");
+    }
+    BUFFER_ADD ("]");
+  }
+
+  if (absolute_offset > 0) {
+    BUFFER_ADD (",\"gauges\":[");
+    for (i = 0; i < absolute_offset; i++) {
+      BUFFER_ADD ("{");
+      BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin);
+      BUFFER_ADD ("\"value\":");
+      BUFFER_ADD ("%"PRIu64, vl->values[store[2][i]].absolute); 
+      BUFFER_ADD ("},");
+    }
+    BUFFER_ADD ("]");
+  }
 
 #undef BUFFER_ADD
+#undef BUFFER_ADD_KEYVAL
 
   DEBUG ("format_json: values_to_json: buffer = %s;", buffer);
   sfree(rates);
   return (0);
 } /* }}} int values_to_json */
-
-static int dstypes_to_json (char *buffer, size_t buffer_size, /* {{{ */
-                const data_set_t *ds)
-{
-  size_t offset = 0;
-  int i;
-
-  memset (buffer, 0, buffer_size);
-
-#define BUFFER_ADD(...) do { \
-  int status; \
-  status = ssnprintf (buffer + offset, buffer_size - offset, \
-      __VA_ARGS__); \
-  if (status < 1) \
-    return (-1); \
-  else if (((size_t) status) >= (buffer_size - offset)) \
-    return (-ENOMEM); \
-  else \
-    offset += ((size_t) status); \
-} while (0)
-
-  BUFFER_ADD ("[");
-  for (i = 0; i < ds->ds_num; i++)
-  {
-    if (i > 0)
-      BUFFER_ADD (",");
-
-    BUFFER_ADD ("\"%s\"", DS_TYPE_TO_STRING (ds->ds[i].type));
-  } /* for ds->ds_num */
-  BUFFER_ADD ("]");
-
-#undef BUFFER_ADD
-
-  DEBUG ("format_json: dstypes_to_json: buffer = %s;", buffer);
-
-  return (0);
-} /* }}} int dstypes_to_json */
-
-static int dsnames_to_json (char *buffer, size_t buffer_size, /* {{{ */
-                const data_set_t *ds)
-{
-  size_t offset = 0;
-  int i;
-
-  memset (buffer, 0, buffer_size);
-
-#define BUFFER_ADD(...) do { \
-  int status; \
-  status = ssnprintf (buffer + offset, buffer_size - offset, \
-      __VA_ARGS__); \
-  if (status < 1) \
-    return (-1); \
-  else if (((size_t) status) >= (buffer_size - offset)) \
-    return (-ENOMEM); \
-  else \
-    offset += ((size_t) status); \
-} while (0)
-
-  BUFFER_ADD ("[");
-  for (i = 0; i < ds->ds_num; i++)
-  {
-    if (i > 0)
-      BUFFER_ADD (",");
-
-    BUFFER_ADD ("\"%s\"", ds->ds[i].name);
-  } /* for ds->ds_num */
-  BUFFER_ADD ("]");
-
-#undef BUFFER_ADD
-
-  DEBUG ("format_json: dsnames_to_json: buffer = %s;", buffer);
-
-  return (0);
-} /* }}} int dsnames_to_json */
-
-static int meta_data_to_json (char *buffer, size_t buffer_size, /* {{{ */
-    meta_data_t *meta)
-{
-  size_t offset = 0;
-  char **keys = NULL;
-  int keys_num;
-  int status;
-  int i;
-
-  buffer[0] = 0;
-
-  if (meta == NULL)
-    return (EINVAL);
-
-#define BUFFER_ADD(...) do { \
-  status = ssnprintf (buffer + offset, buffer_size - offset, \
-      __VA_ARGS__); \
-  if (status < 1) \
-    return (-1); \
-  else if (((size_t) status) >= (buffer_size - offset)) \
-    return (-ENOMEM); \
-  else \
-    offset += ((size_t) status); \
-} while (0)
-
-  keys_num = meta_data_toc (meta, &keys);
-  if (keys_num == 0)
-  {
-    sfree (keys);
-    return (0);
-  }
-
-  for (i = 0; i < keys_num; ++i)
-  {
-    int type;
-    char *key = keys[i];
-
-    type = meta_data_type (meta, key);
-    if (type == MD_TYPE_STRING)
-    {
-      char *value = NULL;
-      if (meta_data_get_string (meta, key, &value) == 0)
-      {
-        char temp[512] = "";
-        json_escape_string (temp, sizeof (temp), value);
-        sfree (value);
-        BUFFER_ADD (",\"%s\":%s", key, temp);
-      }
-    }
-    else if (type == MD_TYPE_SIGNED_INT)
-    {
-      int64_t value = 0;
-      if (meta_data_get_signed_int (meta, key, &value) == 0)
-        BUFFER_ADD (",\"%s\":%"PRIi64, key, value);
-    }
-    else if (type == MD_TYPE_UNSIGNED_INT)
-    {
-      uint64_t value = 0;
-      if (meta_data_get_unsigned_int (meta, key, &value) == 0)
-        BUFFER_ADD (",\"%s\":%"PRIu64, key, value);
-    }
-    else if (type == MD_TYPE_DOUBLE)
-    {
-      double value = 0.0;
-      if (meta_data_get_double (meta, key, &value) == 0)
-        BUFFER_ADD (",\"%s\":%f", key, value);
-    }
-    else if (type == MD_TYPE_BOOLEAN)
-    {
-      _Bool value = 0;
-      if (meta_data_get_boolean (meta, key, &value) == 0)
-        BUFFER_ADD (",\"%s\":%s", key, value ? "true" : "false");
-    }
-
-    free (key);
-  } /* for (keys) */
-  free (keys);
-
-  if (offset <= 0)
-    return (ENOENT);
-
-  buffer[0] = '{'; /* replace leading ',' */
-  BUFFER_ADD ("}");
-
-#undef BUFFER_ADD
-
-  return (0);
-} /* }}} int meta_data_to_json */
 
 static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
                 const data_set_t *ds, const value_list_t *vl, int store_rates)
@@ -347,47 +236,10 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
   if (status != 0)
     return (status);
   BUFFER_ADD ("\"values\":%s", temp);
-
-  status = dstypes_to_json (temp, sizeof (temp), ds);
-  if (status != 0)
-    return (status);
-  BUFFER_ADD (",\"dstypes\":%s", temp);
-
-  status = dsnames_to_json (temp, sizeof (temp), ds);
-  if (status != 0)
-    return (status);
-  BUFFER_ADD (",\"dsnames\":%s", temp);
-
-  BUFFER_ADD (",\"time\":%.3f", CDTIME_T_TO_DOUBLE (vl->time));
-  BUFFER_ADD (",\"interval\":%.3f", CDTIME_T_TO_DOUBLE (vl->interval));
-
-#define BUFFER_ADD_KEYVAL(key, value) do { \
-  status = json_escape_string (temp, sizeof (temp), (value)); \
-  if (status != 0) \
-    return (status); \
-  BUFFER_ADD (",\"%s\":%s", (key), temp); \
-} while (0)
-
-  BUFFER_ADD_KEYVAL ("host", vl->host);
-  BUFFER_ADD_KEYVAL ("plugin", vl->plugin);
-  BUFFER_ADD_KEYVAL ("plugin_instance", vl->plugin_instance);
-  BUFFER_ADD_KEYVAL ("type", vl->type);
-  BUFFER_ADD_KEYVAL ("type_instance", vl->type_instance);
-
-  if (vl->meta != NULL)
-  {
-    char meta_buffer[buffer_size];
-    memset (meta_buffer, 0, sizeof (meta_buffer));
-    status = meta_data_to_json (meta_buffer, sizeof (meta_buffer), vl->meta);
-    if (status != 0)
-      return (status);
-
-    BUFFER_ADD (",\"meta\":%s", meta_buffer);
-  } /* if (vl->meta != NULL) */
-
+  BUFFER_ADD (",\"timestamp\":%.3f", CDTIME_T_TO_DOUBLE (vl->time));
+  BUFFER_ADD (",\"flushInterval\":%.3f", CDTIME_T_TO_DOUBLE (vl->interval));
   BUFFER_ADD ("}");
 
-#undef BUFFER_ADD_KEYVAL
 #undef BUFFER_ADD
 
   DEBUG ("format_json: value_list_to_json: buffer = %s;", buffer);
