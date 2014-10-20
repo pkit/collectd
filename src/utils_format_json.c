@@ -77,33 +77,27 @@ static int json_escape_string (char *buffer, size_t buffer_size, /* {{{ */
   return (0);
 } /* }}} int json_escape_string */
 
-static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
+static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
                 const data_set_t *ds, const value_list_t *vl, int store_rates)
 {
   size_t offset = 0;
-  int i;
-  gauge_t *rates = NULL;
+  int status;
   int store[3][10];
   int gauge_offset = 0;
   int counter_offset = 0;
   int absolute_offset = 0;
+  gauge_t *rates = NULL;
+  int i;
 
   memset (buffer, 0, buffer_size);
 
 #define BUFFER_ADD(...) do { \
-  int status; \
   status = ssnprintf (buffer + offset, buffer_size - offset, \
       __VA_ARGS__); \
   if (status < 1) \
-  { \
-    sfree(rates); \
     return (-1); \
-  } \
   else if (((size_t) status) >= (buffer_size - offset)) \
-  { \
-    sfree(rates); \
     return (-ENOMEM); \
-  } \
   else \
     offset += ((size_t) status); \
 } while (0)
@@ -116,10 +110,14 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
   BUFFER_ADD (",\"%s\":%s", (key), buffer); \
 } while (0)
 
+  /* All value lists have a leading comma. The first one will be replaced with
+   * a square bracket in `format_json_finalize'. */
+  BUFFER_ADD (",{");
   for (i = 0; i < ds->ds_num; i++)
   {
     if (ds->ds[i].type == DS_TYPE_GAUGE)
     {
+      INFO ("write_blueflood plugin found gauge");
       store[0][gauge_offset] = i;
       gauge_offset++;
     }
@@ -141,6 +139,7 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
         BUFFER_ADD ("null");
     }*/
     else if (ds->ds[i].type == DS_TYPE_COUNTER) {
+      INFO ("write_blueflood plugin found counter");
       store[1][counter_offset] = i;
       counter_offset++;
     }
@@ -148,6 +147,7 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
       DEBUG ("Skipping derive data type for now");
     }
     else if (ds->ds[i].type == DS_TYPE_ABSOLUTE) {
+      INFO ("write_blueflood plugin found absolute");
       store[2][absolute_offset] = i;
       absolute_offset++;
     }
@@ -163,6 +163,7 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
   if (counter_offset > 0) {
     BUFFER_ADD ("\"counters\":[");
     for (i = 0; i < counter_offset; i++) {
+      INFO ("ADDING COUNTER to buffer");
       BUFFER_ADD ("{");
       BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin);
       BUFFER_ADD ("\"value\":");
@@ -175,11 +176,13 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
   if (gauge_offset > 0) {
     BUFFER_ADD (",\"gauges\":[");
     for (i = 0; i < gauge_offset; i++) {
+      INFO ("ADDING GAUGE TO BUFFER");
+      INFO ("ADDED metric name as %s, metric value as %g", vl->plugin, vl->values[store[0][i]].gauge);
       BUFFER_ADD ("{");
       BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin);
       BUFFER_ADD ("\"value\":");
       if(isfinite (vl->values[store[0][i]].gauge)) {
-        BUFFER_ADD ("%g", vl->values[i].gauge);
+        BUFFER_ADD ("%g", vl->values[store[0][i]].gauge);
       }
       else
         BUFFER_ADD ("null");
@@ -191,6 +194,7 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
   if (absolute_offset > 0) {
     BUFFER_ADD (",\"gauges\":[");
     for (i = 0; i < absolute_offset; i++) {
+      INFO ("ADDING ABSOLUTE tO BUFFER");
       BUFFER_ADD ("{");
       BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin);
       BUFFER_ADD ("\"value\":");
@@ -200,47 +204,12 @@ static int values_to_json (char *buffer, size_t buffer_size, /* {{{ */
     BUFFER_ADD ("]");
   }
 
-#undef BUFFER_ADD
-#undef BUFFER_ADD_KEYVAL
-
-  DEBUG ("format_json: values_to_json: buffer = %s;", buffer);
-  sfree(rates);
-  return (0);
-} /* }}} int values_to_json */
-
-static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
-                const data_set_t *ds, const value_list_t *vl, int store_rates)
-{
-  char temp[512];
-  size_t offset = 0;
-  int status;
-
-  memset (buffer, 0, buffer_size);
-
-#define BUFFER_ADD(...) do { \
-  status = ssnprintf (buffer + offset, buffer_size - offset, \
-      __VA_ARGS__); \
-  if (status < 1) \
-    return (-1); \
-  else if (((size_t) status) >= (buffer_size - offset)) \
-    return (-ENOMEM); \
-  else \
-    offset += ((size_t) status); \
-} while (0)
-
-  /* All value lists have a leading comma. The first one will be replaced with
-   * a square bracket in `format_json_finalize'. */
-  BUFFER_ADD (",{");
-
-  status = values_to_json (temp, sizeof (temp), ds, vl, store_rates);
-  if (status != 0)
-    return (status);
-  BUFFER_ADD ("\"values\":%s", temp);
-  BUFFER_ADD (",\"timestamp\":%.3f", CDTIME_T_TO_DOUBLE (vl->time));
-  BUFFER_ADD (",\"flushInterval\":%.3f", CDTIME_T_TO_DOUBLE (vl->interval));
+  BUFFER_ADD (",\"timestamp\":%lu", CDTIME_T_TO_MS (vl->time));
+  BUFFER_ADD (",\"flushInterval\":%lu", CDTIME_T_TO_MS (vl->interval));
   BUFFER_ADD ("}");
 
 #undef BUFFER_ADD
+#undef BUFFER_ADD_KEYVAL
 
   DEBUG ("format_json: value_list_to_json: buffer = %s;", buffer);
 
