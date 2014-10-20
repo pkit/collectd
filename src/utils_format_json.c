@@ -82,7 +82,7 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
 {
   size_t offset = 0;
   int status;
-  int store[3][10];
+  int store[3][10]; //TODO eventually we want to dynamically allocate this matrix: It stores the indexes of data types with 0 -> gauge, 1 -> counter, 2 -> absolute
   int gauge_offset = 0;
   int counter_offset = 0;
   int absolute_offset = 0;
