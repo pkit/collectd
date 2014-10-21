@@ -395,6 +395,7 @@ static int wb_write_json (const data_set_t *ds, const value_list_t *vl, /* {{{ *
                 wb_callback_t *cb)
 {
         int status;
+        int format_status;
 
         pthread_mutex_lock (&cb->send_lock);
 
@@ -409,12 +410,21 @@ static int wb_write_json (const data_set_t *ds, const value_list_t *vl, /* {{{ *
                 }
         }
 
-        status = format_json_value_list (cb->send_buffer,
+        format_status = format_json_value_list (cb->send_buffer,
                         &cb->send_buffer_fill,
                         &cb->send_buffer_free,
                         ds, vl, cb->store_rates);
-        if (status == (-ENOMEM))
+
+        if (format_status == (-ENOMEM))
         {
+                // this is now a real error condition, not a sign that we need
+                // to flush.
+
+                //TODO: ERROR!
+
+        }
+
+        if (cb->send_buffer_fill > 0) {
                 status = wb_flush_nolock (/* timeout = */ 0, cb);
                 if (status != 0)
                 {
@@ -422,16 +432,6 @@ static int wb_write_json (const data_set_t *ds, const value_list_t *vl, /* {{{ *
                         pthread_mutex_unlock (&cb->send_lock);
                         return (status);
                 }
-
-                status = format_json_value_list (cb->send_buffer,
-                                &cb->send_buffer_fill,
-                                &cb->send_buffer_free,
-                                ds, vl, cb->store_rates);
-        }
-        if (status != 0)
-        {
-                pthread_mutex_unlock (&cb->send_lock);
-                return (status);
         }
 
         DEBUG ("write_blueflood plugin: <%s> buffer %zu/%zu (%g%%)",
