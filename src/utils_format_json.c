@@ -81,6 +81,8 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
                 const data_set_t *ds, const value_list_t *vl, int store_rates)
 {
   size_t offset = 0;
+  char temp[512];
+  char name_buffer[5 * DATA_MAX_NAME_LEN];
   int status;
   int store[3][10]; //TODO eventually we want to dynamically allocate this matrix: It stores the indexes of data types with 0 -> gauge, 1 -> counter, 2 -> absolute
   int gauge_offset = 0;
@@ -102,16 +104,16 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
     offset += ((size_t) status); \
 } while (0)
 
+  //TODO: zero out value of temp!!!
 #define BUFFER_ADD_KEYVAL(key, value) do { \
-  status = json_escape_string (buffer, sizeof (buffer), (value)); \
+  status = json_escape_string (temp, sizeof (temp), (value)); \
   if (status != 0) \
     return (status); \
-  BUFFER_ADD (",\"%s\":%s", (key), buffer); \
+  BUFFER_ADD ("\"%s\":%s,", (key), temp); \
 } while (0)
 
   /* All value lists have a leading comma. The first one will be replaced with
    * a square bracket in `format_json_finalize'. */
-  BUFFER_ADD ("{");
   for (i = 0; i < ds->ds_num; i++)
   {
     if (ds->ds[i].type == DS_TYPE_GAUGE)
@@ -155,25 +157,40 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
       return (-1);
     }
   } /* for ds->ds_num */
-  
+
+  // don't add anything to buffer if we don't have any data.
+  if (gauge_offset == 0 && counter_offset == 0 && absolute_offset == 0)
+    return 0;
+
+
+  BUFFER_ADD ("{");
   if (counter_offset > 0) {
     BUFFER_ADD ("\"counters\":[");
     for (i = 0; i < counter_offset; i++) {
       INFO ("ADDING COUNTER TO BUFFER"); // TODO These debug statements need to be removed during cleanup
       BUFFER_ADD ("{");
-      BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin); // TODO We might have to create the metric name by prepending other metadata fields like hostname
+      format_name(name_buffer, sizeof (name_buffer),
+                  vl->host, vl->plugin, vl->plugin_instance,
+                  vl->type, vl->type_instance);
+      BUFFER_ADD_KEYVAL ("name", name_buffer);
       BUFFER_ADD ("\"value\":%llu", vl->values[store[1][i]].counter);
       BUFFER_ADD ("},");
     }
-    BUFFER_ADD ("]");
+    offset--;
+    BUFFER_ADD ("],");
+    INFO ("format_json: value_list_to_json: buffer = %s;", buffer);
   }
   
   if (gauge_offset > 0) {
-    BUFFER_ADD (",\"gauges\":[");
+    INFO ("format_json: value_list_to_json: buffer = %s;", buffer);
+    BUFFER_ADD ("\"gauges\":[");
     for (i = 0; i < gauge_offset; i++) {
       INFO ("ADDED GAUGE as %s, metric value as %g", vl->plugin, vl->values[store[0][i]].gauge);
       BUFFER_ADD ("{");
-      BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin);
+      format_name(name_buffer, sizeof (name_buffer),
+                  vl->host, vl->plugin, vl->plugin_instance,
+                  vl->type, vl->type_instance);
+      BUFFER_ADD_KEYVAL ("name", name_buffer);
       if(isfinite (vl->values[store[0][i]].gauge)) {
         BUFFER_ADD ("\"value\":%g", vl->values[store[0][i]].gauge);
       }
@@ -181,24 +198,33 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
         BUFFER_ADD ("\"value\":null");
       BUFFER_ADD ("},");
     }
-    BUFFER_ADD ("]");
+    offset--;
+    BUFFER_ADD ("],");
+    INFO ("format_json: value_list_to_json: buffer = %s;", buffer);
   }
 
   if (absolute_offset > 0) {
-    BUFFER_ADD (",\"gauges\":[");
+    INFO ("format_json: value_list_to_json: buffer = %s;", buffer);
+    BUFFER_ADD ("\"gauges\":[");
     for (i = 0; i < absolute_offset; i++) {
       INFO ("ADDING ABSOLUTE tO BUFFER");
       BUFFER_ADD ("{");
-      BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin);
-      BUFFER_ADD ("\"value\":");
-      BUFFER_ADD ("%"PRIu64, vl->values[store[2][i]].absolute); 
+      format_name(name_buffer, sizeof (name_buffer),
+                  vl->host, vl->plugin, vl->plugin_instance,
+                  vl->type, vl->type_instance);
+      BUFFER_ADD_KEYVAL ("name", name_buffer);
+      BUFFER_ADD ("\"value\":%"PRIu64"},", vl->values[store[2][i]].absolute);
+      /*BUFFER_ADD ("%"PRIu64, vl->values[store[2][i]].absolute); */
       BUFFER_ADD ("},");
     }
-    BUFFER_ADD ("]");
+    offset--;
+    BUFFER_ADD ("],");
+    INFO ("format_json: value_list_to_json: buffer = %s;", buffer);
   }
 
-  BUFFER_ADD (",\"timestamp\":%lu", CDTIME_T_TO_MS (vl->time));
-  BUFFER_ADD (",\"flushInterval\":%lu", CDTIME_T_TO_MS (vl->interval));
+  //TODO: missing tenantId
+  BUFFER_ADD ("\"timestamp\":%lu,", CDTIME_T_TO_MS (vl->time));
+  BUFFER_ADD ("\"flushInterval\":%lu", CDTIME_T_TO_MS (vl->interval));
   BUFFER_ADD ("}");
 
 #undef BUFFER_ADD
