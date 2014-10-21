@@ -103,21 +103,19 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
 } while (0)
 
 #define BUFFER_ADD_KEYVAL(key, value) do { \
-  int status2; \
-  status2 = json_escape_string (buffer, sizeof (buffer), (value)); \
-  if (status2 != 0) \
-    return (status2); \
+  status = json_escape_string (buffer, sizeof (buffer), (value)); \
+  if (status != 0) \
+    return (status); \
   BUFFER_ADD (",\"%s\":%s", (key), buffer); \
 } while (0)
 
   /* All value lists have a leading comma. The first one will be replaced with
    * a square bracket in `format_json_finalize'. */
-  BUFFER_ADD (",{");
+  BUFFER_ADD ("{");
   for (i = 0; i < ds->ds_num; i++)
   {
     if (ds->ds[i].type == DS_TYPE_GAUGE)
     {
-      INFO ("write_blueflood plugin found gauge");
       store[0][gauge_offset] = i;
       gauge_offset++;
     }
@@ -139,7 +137,6 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
         BUFFER_ADD ("null");
     }*/
     else if (ds->ds[i].type == DS_TYPE_COUNTER) {
-      INFO ("write_blueflood plugin found counter");
       store[1][counter_offset] = i;
       counter_offset++;
     }
@@ -147,7 +144,6 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
       DEBUG ("Skipping derive data type for now");
     }
     else if (ds->ds[i].type == DS_TYPE_ABSOLUTE) {
-      INFO ("write_blueflood plugin found absolute");
       store[2][absolute_offset] = i;
       absolute_offset++;
     }
@@ -163,11 +159,10 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
   if (counter_offset > 0) {
     BUFFER_ADD ("\"counters\":[");
     for (i = 0; i < counter_offset; i++) {
-      INFO ("ADDING COUNTER to buffer");
+      INFO ("ADDING COUNTER TO BUFFER"); // TODO These debug statements need to be removed during cleanup
       BUFFER_ADD ("{");
-      BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin);
-      BUFFER_ADD ("\"value\":");
-      BUFFER_ADD ("%llu", vl->values[store[1][i]].counter);
+      BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin); // TODO We might have to create the metric name by prepending other metadata fields like hostname
+      BUFFER_ADD ("\"value\":%llu", vl->values[store[1][i]].counter);
       BUFFER_ADD ("},");
     }
     BUFFER_ADD ("]");
@@ -176,16 +171,14 @@ static int value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
   if (gauge_offset > 0) {
     BUFFER_ADD (",\"gauges\":[");
     for (i = 0; i < gauge_offset; i++) {
-      INFO ("ADDING GAUGE TO BUFFER");
-      INFO ("ADDED metric name as %s, metric value as %g", vl->plugin, vl->values[store[0][i]].gauge);
+      INFO ("ADDED GAUGE as %s, metric value as %g", vl->plugin, vl->values[store[0][i]].gauge);
       BUFFER_ADD ("{");
       BUFFER_ADD_KEYVAL ("\"name\":", vl->plugin);
-      BUFFER_ADD ("\"value\":");
       if(isfinite (vl->values[store[0][i]].gauge)) {
-        BUFFER_ADD ("%g", vl->values[store[0][i]].gauge);
+        BUFFER_ADD ("\"value\":%g", vl->values[store[0][i]].gauge);
       }
       else
-        BUFFER_ADD ("null");
+        BUFFER_ADD ("\"value\":null");
       BUFFER_ADD ("},");
     }
     BUFFER_ADD ("]");
@@ -274,13 +267,14 @@ int format_json_finalize (char *buffer, /* {{{ */
 
   /* Replace the leading comma added in `value_list_to_json' with a square
    * bracket. */
-  if (buffer[0] != ',')
-    return (-EINVAL);
-  buffer[0] = '[';
+  //if (buffer[0] != ',')
+  //  return (-EINVAL);
+  //buffer[0] = '';
 
   pos = *ret_buffer_fill;
-  buffer[pos] = ']';
-  buffer[pos+1] = 0;
+  buffer[pos] = 0;
+
+  INFO ("write_blueflood plugin: In finalize method %s", buffer);
 
   (*ret_buffer_fill)++;
   (*ret_buffer_free)--;
