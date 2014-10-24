@@ -263,8 +263,7 @@ static int wb_value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
                 INFO ("format_json: value_list_to_json: buffer = %s;", buffer);
         }
 
-        //TODO: missing tenantId
-        BUFFER_ADD("\"tenantid\":%s,",tenantid);
+        BUFFER_ADD("\"tenantid\":\"%s\",",tenantid);
         BUFFER_ADD ("\"timestamp\":%lu,", CDTIME_T_TO_MS (vl->time));
         BUFFER_ADD ("\"flushInterval\":%lu", CDTIME_T_TO_MS (vl->interval));
         BUFFER_ADD ("}");
