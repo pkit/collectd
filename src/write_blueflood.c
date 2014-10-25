@@ -135,10 +135,12 @@ static int wb_value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
                 const data_set_t *ds, const value_list_t *vl, const char *tenantid)
 {
         size_t offset = 0;
-        char temp[512];
+        char temp[512] = {0};
         char name_buffer[5 * DATA_MAX_NAME_LEN];
         int status;
-        int store[3][10]; //TODO eventually we want to dynamically allocate this matrix: It stores the indexes of data types with 0 -> gauge, 1 -> counter, 2 -> absolute
+#define MAX_DATA_TYPES  3
+#define MAX_OFFSET      10
+        int store[MAX_DATA_TYPES][MAX_OFFSET]; 
         int gauge_offset = 0;
         int counter_offset = 0;
         int absolute_offset = 0;
@@ -157,7 +159,6 @@ static int wb_value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
         else \
         offset += ((size_t) status); } while (0)
 
-        //TODO: zero out value of temp!!!
 #define BUFFER_ADD_KEYVAL(key, value) do { \
         status = json_escape_string (temp, sizeof (temp), (value)); \
         if (status != 0) \
@@ -263,7 +264,7 @@ static int wb_value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
                 INFO ("format_json: value_list_to_json: buffer = %s;", buffer);
         }
 
-        BUFFER_ADD("\"tenantid\":\"%s\",",tenantid);
+        BUFFER_ADD("\"tenantId\":\"%s\",",tenantid);
         BUFFER_ADD ("\"timestamp\":%lu,", CDTIME_T_TO_MS (vl->time));
         BUFFER_ADD ("\"flushInterval\":%lu", CDTIME_T_TO_MS (vl->interval));
         BUFFER_ADD ("}");
