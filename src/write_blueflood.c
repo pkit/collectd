@@ -64,6 +64,8 @@ struct wb_callback_s
 };
 typedef struct wb_callback_s wb_callback_t;
 
+#define MAX_DATA_TYPES  3
+#define MAX_OFFSET      100
 int wb_format_json_finalize (char *buffer, /* {{{ */
                 size_t *ret_buffer_fill, size_t *ret_buffer_free)
 {
@@ -138,8 +140,6 @@ static int wb_value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
         char temp[512] = {0};
         char name_buffer[5 * DATA_MAX_NAME_LEN];
         int status;
-#define MAX_DATA_TYPES  3
-#define MAX_OFFSET      10
         int store[MAX_DATA_TYPES][MAX_OFFSET]; 
         int gauge_offset = 0;
         int counter_offset = 0;
@@ -174,14 +174,17 @@ static int wb_value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
                         store[0][gauge_offset] = i;
                         gauge_offset++;
                 }
-                else if (ds->ds[i].type == DS_TYPE_COUNTER) {
+                else if (ds->ds[i].type == DS_TYPE_COUNTER) 
+                {
                         store[1][counter_offset] = i;
                         counter_offset++;
                 }
-                else if (ds->ds[i].type == DS_TYPE_DERIVE) {
+                else if (ds->ds[i].type == DS_TYPE_DERIVE) 
+                {
                         DEBUG ("Skipping derive data type for now");
                 }
-                else if (ds->ds[i].type == DS_TYPE_ABSOLUTE) {
+                else if (ds->ds[i].type == DS_TYPE_ABSOLUTE) 
+                {
                         store[2][absolute_offset] = i;
                         absolute_offset++;
                 }
@@ -256,7 +259,6 @@ static int wb_value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
                                         vl->type, vl->type_instance);
                         BUFFER_ADD_KEYVAL ("name", name_buffer);
                         BUFFER_ADD ("\"value\":%"PRIu64"},", vl->values[store[2][i]].absolute);
-                        /*BUFFER_ADD ("%"PRIu64, vl->values[store[2][i]].absolute); */
                         BUFFER_ADD ("},");
                 }
                 offset--;
