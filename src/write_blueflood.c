@@ -66,29 +66,7 @@ typedef struct wb_callback_s wb_callback_t;
 
 #define MAX_DATA_TYPES  3
 #define MAX_OFFSET      100
-int wb_format_json_finalize (char *buffer, /* {{{ */
-                size_t *ret_buffer_fill, size_t *ret_buffer_free)
-{
-        size_t pos;
-
-        if ((buffer == NULL) || (ret_buffer_fill == NULL) || (ret_buffer_free == NULL))
-                return (-EINVAL);
-
-        if (*ret_buffer_free < 2)
-                return (-ENOMEM);
-
-        pos = *ret_buffer_fill;
-        buffer[pos] = 0;
-
-        INFO ("write_blueflood plugin: In finalize method %s", buffer);
-
-        (*ret_buffer_fill)++;
-        (*ret_buffer_free)--;
-
-        return (0);
-} /* }}} int wb_format_json_finalize */
-
-static int json_escape_string (char *buffer, size_t buffer_size, /* {{{ */
+static int wb_json_escape_string (char *buffer, size_t buffer_size, /* {{{ */
                 const char *string)
 {
         size_t src_pos;
@@ -133,7 +111,7 @@ static int json_escape_string (char *buffer, size_t buffer_size, /* {{{ */
         return (0);
 } /* }}} int wb_json_escape_string */
 
-static int wb_value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
+ static int wb_value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
                 const data_set_t *ds, const value_list_t *vl, const char *tenantid)
 {
         size_t offset = 0;
@@ -160,7 +138,7 @@ static int wb_value_list_to_json (char *buffer, size_t buffer_size, /* {{{ */
         offset += ((size_t) status); } while (0)
 
 #define BUFFER_ADD_KEYVAL(key, value) do { \
-        status = json_escape_string (temp, sizeof (temp), (value)); \
+        status = wb_json_escape_string (temp, sizeof (temp), (value)); \
         if (status != 0) \
         return (status); \
         BUFFER_ADD ("\"%s\":%s,", (key), temp); } while (0)
@@ -326,6 +304,28 @@ static void wb_reset_buffer (wb_callback_t *cb)  /* {{{ */
                         &cb->send_buffer_fill,
                         &cb->send_buffer_free);
 } /* }}} wb_reset_buffer */
+
+int wb_format_json_finalize (char *buffer, /* {{{ */
+                size_t *ret_buffer_fill, size_t *ret_buffer_free)
+{
+        size_t pos;
+
+        if ((buffer == NULL) || (ret_buffer_fill == NULL) || (ret_buffer_free == NULL))
+                return (-EINVAL);
+
+        if (*ret_buffer_free < 2)
+                return (-ENOMEM);
+
+        pos = *ret_buffer_fill;
+        buffer[pos] = 0;
+
+        INFO ("write_blueflood plugin: In finalize method %s", buffer);
+
+        (*ret_buffer_fill)++;
+        (*ret_buffer_free)--;
+
+        return (0);
+}  /* }}} int wb_format_json_finalize */
 
 static int wb_send_buffer (wb_callback_t *cb) /* {{{ */
 {
