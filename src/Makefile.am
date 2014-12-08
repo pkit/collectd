@@ -1150,8 +1150,8 @@ write_blueflood_la_LDFLAGS = $(PLUGIN_LDFLAGS)
 write_blueflood_la_CFLAGS = $(AM_CFLAGS)
 write_blueflood_la_LIBADD =
 if BUILD_WITH_LIBCURL
-write_blueflood_la_CFLAGS += $(BUILD_WITH_LIBCURL_CFLAGS)
-write_blueflood_la_LIBADD += $(BUILD_WITH_LIBCURL_LIBS)
+write_blueflood_la_CFLAGS += $(BUILD_WITH_LIBCURL_CFLAGS) 
+write_blueflood_la_LIBADD += $(BUILD_WITH_LIBCURL_LIBS) $(BUILD_WITH_LIBYAJL_LIBS)
 endif
 endif
 
