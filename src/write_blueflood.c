@@ -21,6 +21,7 @@
  *   Florian octo Forster <octo at collectd.org>
  *   Doug MacEachern <dougm@hyperic.com>
  *   Paul Sadauskas <psadauskas@gmail.com>
+ *   Yaroslav Litvinov <yaroslav.litvinov@rackspace.com>
  **/
 
 #include <assert.h>
@@ -68,9 +69,6 @@ struct wb_callback_s
     pthread_mutex_t send_lock;
 };
 typedef struct wb_callback_s wb_callback_t;
-
-#define MAX_DATA_TYPES  3
-#define MAX_OFFSET      100
 
 /*************************buffered io*************************/
 
@@ -238,6 +236,7 @@ int transport_send(struct blueflood_transport_interface *this, const char *buffe
 }
 
 void transport_end_session(struct blueflood_transport_interface *this){
+    (void)this;
 }
 
 const char *transport_last_error_text(struct blueflood_transport_interface *this){
@@ -280,8 +279,6 @@ void blueflood_curl_transport_global_finalize(){
 
 
 /**************************************************************/
-enum { js_str, js_int, js_dbl };
-#define STR_NULL "null"
 #define STR_NAME "name"
 #define STR_VALUE "value"
 #define STR_COUNTER "counter"
@@ -292,7 +289,7 @@ enum { js_str, js_int, js_dbl };
 #define STR_COUNTERS "counters"
 #define STR_GAUGES "gauges"
 #define STR_DERIVES "derives"
-#define STR_ABSOLUTES "derives"
+#define STR_ABSOLUTES "absolutes"
 
 #define YAJL_CHECK_RETURN_ON_ERROR(func){	\
 	    yajl_gen_status s = func;		\
@@ -301,6 +298,13 @@ enum { js_str, js_int, js_dbl };
 	    }					\
     }
 
+
+static void jsongen_init(yajl_gen *gen){
+    /*initialize yajl*/
+    *gen = yajl_gen_alloc(NULL);
+    yajl_gen_config(*gen, yajl_gen_beautify, 1);
+    yajl_gen_config(*gen, yajl_gen_validate_utf8, 1);
+}
 
 static int jsongen_map_key_value(yajl_gen gen, int ds_type, 
 				 const value_list_t *vl, const value_t *value)
@@ -330,9 +334,7 @@ static int jsongen_map_key_value(yajl_gen gen, int ds_type,
 			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_double(gen, value->gauge));
 		}
 		else{
-			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
-								   (const unsigned char *)STR_NULL, 
-								   strlen(STR_NULL)));
+			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_null(gen));
 		}
 	}
 	else if ( ds_type == DS_TYPE_COUNTER ){
@@ -387,7 +389,7 @@ static int jsongen_metric_array(yajl_gen gen, char items_count, int ds_type,
 	return yajl_gen_status_ok;
 }
 
-static int wb_yajl_jsongen(wb_callback_t *cb, 
+static int jsongen_output(wb_callback_t *cb, 
 			   const data_set_t *ds, 
 			   const value_list_t *vl )
 {
@@ -445,6 +447,10 @@ static int wb_yajl_jsongen(wb_callback_t *cb,
 		size_t len;
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(cb->yajl_gen, &buf, &len));
 		cb->buffered_io->write(cb->buffered_io, 0xF00, buf, len);
+		/*can't use yajl_gen_reset because can link only with yajl v1 */
+		yajl_gen_clear(cb->yajl_gen);
+		yajl_gen_free(cb->yajl_gen);
+		jsongen_init(&cb->yajl_gen);
 	}
 	return 0;
 } /* }}} int wb_value_list_to_json */
@@ -452,12 +458,10 @@ static int wb_yajl_jsongen(wb_callback_t *cb,
 
 static void wb_callback_free (void *data) /* {{{ */
 {
-	wb_callback_t *cb;
+	wb_callback_t *cb = data;
 
 	if (data == NULL)
 	    return;
-
-	cb = data;
 
 	/*cache flush & free memory */
 	cb->buffered_io->flush_write(cb->buffered_io, 0xF00);
@@ -481,21 +485,10 @@ static void wb_callback_free (void *data) /* {{{ */
 	sfree (cb);
 } /* }}} void wb_callback_free */
 
-static int wb_write_json (const data_set_t *ds, const value_list_t *vl, /* {{{ */
-			  wb_callback_t *cb)
-{
-	int json_err = wb_yajl_jsongen(cb, ds, vl);
-	if ( json_err ){
-		ERROR ("%s plugin: json generating failed err=%d.", PLUGIN_NAME, json_err);
-	}
-
-	return (0);
-} /* }}} int wb_write_json */
 
 static int wb_write (const data_set_t *ds, const value_list_t *vl, /* {{{ */
 		     user_data_t *user_data)
 {       
-	INFO ("%s plugin: write called", PLUGIN_NAME);
 	wb_callback_t *cb;
 	int status;
 
@@ -504,10 +497,12 @@ static int wb_write (const data_set_t *ds, const value_list_t *vl, /* {{{ */
 
 	cb = user_data->data; /*is it thread-safe to access user_data->data ?*/
 	pthread_mutex_lock (&cb->send_lock);
-	status = wb_write_json (ds, vl, cb);
+	status = jsongen_output(cb, ds, vl);
+	if ( status != 0 ){
+		ERROR ("%s plugin: json generating failed err=%d.", PLUGIN_NAME, status);
+		status = -1;
+	}
 	pthread_mutex_unlock (&cb->send_lock);
-
-	INFO ("%s plugin: write OK", PLUGIN_NAME);
 	return (status);
 } /* }}} int wb_write */
 
@@ -539,7 +534,6 @@ static int wb_flush (cdtime_t timeout, /* {{{ */
 
 static int wb_config_url (oconfig_item_t *ci) /* {{{ */
 {
-	INFO ("configuring the blueflood plugin");
 	wb_callback_t *cb;
 	user_data_t user_data;
 	int i;
@@ -595,11 +589,7 @@ static int wb_config_url (oconfig_item_t *ci) /* {{{ */
 		wb_callback_free (cb);
 		return -1;
 	}
-
-	/*initialize yajl*/
-	cb->yajl_gen = yajl_gen_alloc(NULL);
-	yajl_gen_config(cb->yajl_gen, yajl_gen_beautify, 1);
-	yajl_gen_config(cb->yajl_gen, yajl_gen_validate_utf8, 1);
+	jsongen_init(&cb->yajl_gen);
 
 	DEBUG ("%s plugin: Registering write callback with URL %s",
 	       PLUGIN_NAME, cb->location);
@@ -610,14 +600,14 @@ static int wb_config_url (oconfig_item_t *ci) /* {{{ */
 	plugin_register_flush (PLUGIN_NAME, wb_flush, &user_data);
 	plugin_register_write (PLUGIN_NAME, wb_write, &user_data);
 
-	INFO ("%s write callback registered", PLUGIN_NAME);
+	INFO ("%s plugin: write callback registered", PLUGIN_NAME);
 
 	return (0);
 } /* }}} int wb_config_url */
 
 static int wb_config (oconfig_item_t *ci) /* {{{ */
 {
-	INFO ("%s config callback", PLUGIN_NAME);
+	INFO ("%s plugin: config callback", PLUGIN_NAME);
 	int err=0;
 	int i;
 	for (i = 0; i < ci->children_num; i++) {
@@ -644,30 +634,30 @@ static int wb_init (void) /* {{{ */
 {
 	/* Call this while collectd is still single-threaded to avoid
 	 * initialization issues in libgcrypt. */
-	INFO ("%s init", PLUGIN_NAME);
+	INFO ("%s plugin: init", PLUGIN_NAME);
 
 	int curl_init_err = blueflood_curl_transport_global_initialize(CURL_GLOBAL_SSL);
 	if ( curl_init_err != 0 ){
 		/*curl init error handling*/
-		ERROR ("%s plugin init error::curl_global_init=%d", PLUGIN_NAME, curl_init_err );
+		ERROR ("%s plugin: init error::curl_global_init=%d", PLUGIN_NAME, curl_init_err );
 		return -1;
 	}
 
-        INFO ("%s init successful", PLUGIN_NAME);
+        INFO ("%s plugin: init successful", PLUGIN_NAME);
         return (0);
 } /* }}} int wb_init */
 
 static int wb_shutdown (void) /* {{{ */
 {
-	INFO ("%s plugin shutdown", PLUGIN_NAME);
+	INFO ("%s plugin: shutdown", PLUGIN_NAME);
 	blueflood_curl_transport_global_finalize();
-        INFO ("%s plugin shutdown successful", PLUGIN_NAME);
+        INFO ("%s plugin: shutdown successful", PLUGIN_NAME);
         return 0;
 } /* }}} int wb_shutdown */
 
 void module_register (void) /* {{{ */
 {       
-	INFO ("%s registered", PLUGIN_NAME);
+	INFO ("%s plugin: registered", PLUGIN_NAME);
         plugin_register_complex_config (PLUGIN_NAME, wb_config);
         plugin_register_init (PLUGIN_NAME, wb_init);
 	plugin_register_shutdown (PLUGIN_NAME, wb_shutdown);

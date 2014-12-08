@@ -23,6 +23,7 @@ struct callbacks_blueflood{
 
 struct callbacks_blueflood s_data;
 pthread_t s_write_thread;
+pthread_t s_write_thread2;
 
 /*copied from collectD to get rid from yet another object file*/
 int cf_util_get_string (const oconfig_item_t *ci, char **ret_string) /* {{{ */
@@ -140,18 +141,21 @@ int plugin_register_complex_config (const char *type,
     nested_config->values[0].value.string = strdup("123456");
    
     s_data.callback_config = callback;
+    return 0;
 }
 
 int plugin_register_init (const char *name,
 			  plugin_init_cb callback){
     INFO ("plugin_register_init");
     s_data.callback_plugin_init_cb = callback;
+    return 0;
 }
 
 int plugin_register_shutdown (const char *name,
 			      plugin_shutdown_cb callback){
     INFO ("plugin_register_shutdown");
     s_data.callback_plugin_shutdown_cb = callback;
+    return 0;
 }
 
 int plugin_register_write (const char *name,
@@ -159,6 +163,7 @@ int plugin_register_write (const char *name,
     INFO ("plugin_register_write");
     s_data.user_data = *user_data;
     s_data.plugin_write_cb = callback;
+    return 0;
 }
 
 int plugin_register_flush (const char *name,
@@ -166,6 +171,7 @@ int plugin_register_flush (const char *name,
     INFO ("plugin_register_flush");
     s_data.user_data = *user_data;
     s_data.plugin_flush_cb = callback;
+    return 0;
 }
 
 #include "write_blueflood.c"
@@ -225,12 +231,17 @@ int main(){
     /*test writes*/
     int ret = pthread_create(&s_write_thread, NULL, write_asynchronously, &s_data);
     assert(0 == ret);
+    int ret2 = pthread_create(&s_write_thread2, NULL, write_asynchronously, &s_data);
+    assert(0 == ret2);
     ret = pthread_join(s_write_thread, NULL);
     assert(0 == ret);
+    ret = pthread_join(s_write_thread2, NULL);
+    assert(0 == ret2);
     /*test flush*/
     s_data.plugin_flush_cb(0, "", &s_data.user_data);
     /*run free callback*/
     s_data.user_data.free_func(s_data.user_data.data);
     /*run shutdown callback*/
     s_data.callback_plugin_shutdown_cb();
+    return 0;
 }
