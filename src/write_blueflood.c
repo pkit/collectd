@@ -45,40 +45,68 @@
 
 #define PLUGIN_NAME "write_blueflood"
 
+/*used by buffer io*/
+#define WRITE_IF_BUFFER_ENOUGH(iowrite, data, size)			\
+    if ( size <= iowrite->data.bufmax - iowrite->data.cursor ){		\
+	    /*buffer is enough to write data*/				\
+	    memcpy( iowrite->data.buf + iowrite->data.cursor, data, size ); \
+	    iowrite->data.cursor += size;				\
+    }
+
+/*used by transport*/
+#define CURL_SETOPT_RETURN_ERR(option, parameter){			\
+	    CURLcode err;						\
+	    if ( CURLE_OK != (err=curl_easy_setopt(self->curl, option, parameter)) ){ \
+		    return err;						\
+	    }								\
+    }
+
+/*used by json generator*/
+#define YAJL_CHECK_RETURN_ON_ERROR(func){	\
+	    yajl_gen_status s = func;		\
+	    if ( s!=yajl_gen_status_ok ){	\
+		    return s;			\
+	    }					\
+    }
+
+
+/*literals for json output*/
+#define STR_NAME "name"
+#define STR_VALUE "value"
+#define STR_COUNTER "counter"
+#define STR_TENANTID "tenantId"
+#define STR_TIMESTAMP "timestamp"
+#define STR_FLUSH_INTERVAL "flushInterval"
+
+#define STR_COUNTERS "counters"
+#define STR_GAUGES "gauges"
+#define STR_DERIVES "derives"
+#define STR_ABSOLUTES "absolutes"
+
 /*forward declarations*/
 struct BufferedIOWrite;
 
-/*
- * Private variables
- */
-struct wb_callback_s
+typedef struct wb_callback_s
 {
-    char *location;
-
+    char *url;
     char *user;
     char *pass;
     char *tenantid;
-#define WH_FORMAT_JSON    1
 
     struct BufferedIOWrite* buffered_io;
-    /*different yajl generators for simultaneous generation into
-      separate buffers*/
     yajl_gen yajl_gen;
 
     char *send_buffer;
     pthread_mutex_t send_lock;
-};
-typedef struct wb_callback_s wb_callback_t;
+} wb_callback_t;
 
-/*************************buffered io*************************/
+/***************buffered io declaration*********************/
 
 /*declaration of buffer IO*/
 struct BufferedIOData{
     char* buf;
     int   bufmax;
     int   cursor;
-    // for read
-    int   datasize;
 };
 
 /*Repurpose file output caching for networking io, ignore file handle
@@ -90,7 +118,7 @@ typedef struct BufferedIOWrite{
     struct BufferedIOData data;
 } BufferedIOWrite;
 
-/**********************curl transport*********************/
+/****************curl transport declaration*****************/
 struct blueflood_transport_interface {
     int  (*construct)(struct blueflood_transport_interface *this);
     void (*destroy)(struct blueflood_transport_interface *this);
@@ -102,7 +130,7 @@ struct blueflood_transport_interface {
 
 struct blueflood_curl_transport_t{
     struct blueflood_transport_interface public; /*it is must be first item in structure*/
-    //data
+    /*data*/
     CURL *curl;
     char *url;
     char curl_errbuf[CURL_ERROR_SIZE];
@@ -111,14 +139,8 @@ struct blueflood_curl_transport_t{
 /*global variables*/
 struct blueflood_transport_interface *s_blueflood_transport;
 
-/*implementation of buffer IO*/
 
-#define WRITE_IF_BUFFER_ENOUGH(iowrite, data, size)			\
-    if ( size <= iowrite->data.bufmax - iowrite->data.cursor ){		\
-	    /*buffer is enough to write data*/				\
-	    memcpy( iowrite->data.buf + iowrite->data.cursor, data, size ); \
-	    iowrite->data.cursor += size;				\
-    }
+/***************buffered io implementation******************/
 
 static void buf_flush_write( BufferedIOWrite* self, int handle ){
 	if ( self->data.cursor ){
@@ -144,8 +166,8 @@ static int buf_write(BufferedIOWrite* self, int handle, const void* data, size_t
 
 /*Create io engine with buffering facility, i/o optimizer.  alloc in
   heap, ownership is transfered*/
-BufferedIOWrite* AllocBufferedIOWrite(void* buf, size_t size,
-				      ssize_t (*f) (int handle, const void* data, size_t size) ){
+static BufferedIOWrite* AllocBufferedIOWrite(void* buf, size_t size,
+					     ssize_t (*f) (int handle, const void* data, size_t size) ){
 	assert(buf);
 	BufferedIOWrite* self = malloc( sizeof(BufferedIOWrite) );
 	if ( self == NULL ) return NULL;
@@ -163,7 +185,7 @@ BufferedIOWrite* AllocBufferedIOWrite(void* buf, size_t size,
 }
 
 /*@param handle is not using*/
-ssize_t write_send(int handle, const void* data, size_t size){
+static ssize_t write_send(int handle, const void* data, size_t size){
 	if ( (s_blueflood_transport->start_session(s_blueflood_transport)) != 0 ){
 		ERROR ("%s plugin: %s", PLUGIN_NAME, 
 		       s_blueflood_transport->last_error_text(s_blueflood_transport));
@@ -172,16 +194,9 @@ ssize_t write_send(int handle, const void* data, size_t size){
 	return s_blueflood_transport->send(s_blueflood_transport, data, size);
 }
 
-/*blueflood transport implementation*/
+/*************blueflood transport implementation************/
 
-#define CURL_SETOPT_RETURN_ERR(option, parameter){			\
-	    CURLcode err;						\
-	    if ( CURLE_OK != (err=curl_easy_setopt(self->curl, option, parameter)) ){ \
-		    return err;						\
-	    }								\
-    }
-
-int transport_construct(struct blueflood_transport_interface *this ){
+static int transport_construct(struct blueflood_transport_interface *this ){
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
 	assert( self->curl == NULL );
 	self->curl = curl_easy_init();
@@ -192,7 +207,7 @@ int transport_construct(struct blueflood_transport_interface *this ){
 	return 0;
 }
 
-void transport_destroy(struct blueflood_transport_interface *this){
+static void transport_destroy(struct blueflood_transport_interface *this){
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
 	if ( self->curl != NULL ){
 		curl_easy_cleanup (self->curl);
@@ -201,17 +216,16 @@ void transport_destroy(struct blueflood_transport_interface *this){
 	free(self);
 }
 
-int transport_start_session(struct blueflood_transport_interface *this){
+static int transport_start_session(struct blueflood_transport_interface *this){
+	struct curl_slist *headers = NULL;
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
 	if (self->curl == NULL){
 		strncpy(self->curl_errbuf, "libcurl: curl_easy_init failed.", CURL_ERROR_SIZE );
 		return -1;
 	}
-
 	CURL_SETOPT_RETURN_ERR(CURLOPT_NOSIGNAL, 1L);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_USERAGENT, COLLECTD_USERAGENT"C");
-
-	struct curl_slist *headers = NULL;
+	
 	headers = curl_slist_append (headers, "Accept:  */*");
 	headers = curl_slist_append (headers, "Content-Type: application/json");
 	headers = curl_slist_append (headers, "Expect:");
@@ -222,7 +236,7 @@ int transport_start_session(struct blueflood_transport_interface *this){
 	return 0;
 }
 
-int transport_send(struct blueflood_transport_interface *this, const char *buffer, int len){
+static int transport_send(struct blueflood_transport_interface *this, const char *buffer, int len){
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
 	CURLcode status = 0;
 
@@ -235,11 +249,11 @@ int transport_send(struct blueflood_transport_interface *this, const char *buffe
 	return status;
 }
 
-void transport_end_session(struct blueflood_transport_interface *this){
-    (void)this;
+static void transport_end_session(struct blueflood_transport_interface *this){
+	(void)this;
 }
 
-const char *transport_last_error_text(struct blueflood_transport_interface *this){
+static const char *transport_last_error_text(struct blueflood_transport_interface *this){
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
 	return self->curl_errbuf;
 }
@@ -263,47 +277,30 @@ struct blueflood_transport_interface* blueflood_curl_transport_construct(const c
 	    return NULL;
 }
 
-void blueflood_curl_transport_destroy(struct blueflood_transport_interface* interface){
-	interface->destroy(interface);
-}
-
-int blueflood_curl_transport_global_initialize(long flags){
+static int blueflood_curl_transport_global_initialize(long flags){
 	/*As curl_global_init is not thread-safe it must be called a once
 	  before start of using it*/
 	return curl_global_init(flags);
 }
 
-void blueflood_curl_transport_global_finalize(){
+static void blueflood_curl_transport_global_finalize(){
 	curl_global_cleanup();
 }
 
+/*************yajl json generator implementation************/
 
-/**************************************************************/
-#define STR_NAME "name"
-#define STR_VALUE "value"
-#define STR_COUNTER "counter"
-#define STR_TENANTID "tenantId"
-#define STR_TIMESTAMP "timestamp"
-#define STR_FLUSH_INTERVAL "flushInterval"
-
-#define STR_COUNTERS "counters"
-#define STR_GAUGES "gauges"
-#define STR_DERIVES "derives"
-#define STR_ABSOLUTES "absolutes"
-
-#define YAJL_CHECK_RETURN_ON_ERROR(func){	\
-	    yajl_gen_status s = func;		\
-	    if ( s!=yajl_gen_status_ok ){	\
-		    return s;			\
-	    }					\
-    }
-
-
-static void jsongen_init(yajl_gen *gen){
-    /*initialize yajl*/
-    *gen = yajl_gen_alloc(NULL);
-    yajl_gen_config(*gen, yajl_gen_beautify, 1);
-    yajl_gen_config(*gen, yajl_gen_validate_utf8, 1);
+static int jsongen_init(yajl_gen *gen){
+	/*initialize yajl*/
+	*gen = yajl_gen_alloc(NULL);
+	if ( *gen != NULL ){
+		yajl_gen_config(*gen, yajl_gen_beautify, 1);
+		yajl_gen_config(*gen, yajl_gen_validate_utf8, 1);
+		return 0;
+	}
+	else{
+		ERROR ("%s plugin: yajl_gen_alloc error", PLUGIN_NAME );
+		return -1;
+	}
 }
 
 static int jsongen_map_key_value(yajl_gen gen, int ds_type, 
@@ -312,22 +309,22 @@ static int jsongen_map_key_value(yajl_gen gen, int ds_type,
 	char name_buffer[5 * DATA_MAX_NAME_LEN];
 
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_open(gen));
-	//name's key
+	/*name's key*/
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
 						   (const unsigned char *)STR_NAME, 
 						   strlen(STR_NAME)));
 	format_name(name_buffer, sizeof (name_buffer),
 		    vl->host, vl->plugin, vl->plugin_instance,
 		    vl->type, vl->type_instance);
-	//name's value
+	/*name's value*/
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
 						   (const unsigned char *)name_buffer, 
 						   strlen(name_buffer)));
-	//value' key
+	/*value' key*/
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
 						   (const unsigned char *)STR_VALUE, 
 						   strlen(STR_VALUE)));
-	//value's value
+	/*value's value*/
 	if ( ds_type == DS_TYPE_GAUGE ){
 
 		if(isfinite (value->gauge)){
@@ -356,7 +353,7 @@ static int jsongen_map_key_value(yajl_gen gen, int ds_type,
 static int jsongen_metric_array(yajl_gen gen, char items_count, int ds_type, 
 				const value_list_t *vl, const value_t *value ){
 	if ( !items_count ){
-		//value's value
+		/*map's key*/
 		if ( ds_type == DS_TYPE_GAUGE ){
 			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
 								   (const unsigned char *)STR_GAUGES, 
@@ -383,15 +380,15 @@ static int jsongen_metric_array(yajl_gen gen, char items_count, int ds_type,
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_array_open(gen));
 	}
 
-	//map items
+	/*map items*/
 	jsongen_map_key_value(gen, ds_type, vl, value);
 
 	return yajl_gen_status_ok;
 }
 
 static int jsongen_output(wb_callback_t *cb, 
-			   const data_set_t *ds, 
-			   const value_list_t *vl )
+			  const data_set_t *ds, 
+			  const value_list_t *vl )
 {
 	int overall_items_count_added=0;
 	int i, k;
@@ -419,8 +416,11 @@ static int jsongen_output(wb_callback_t *cb,
 		}
 	} /* for ds->ds_num */
 
-	// don't add anything to buffer if we don't have any data.
+	/* don't add anything to buffer if we don't have any data.*/
 	if (overall_items_count_added){
+		const unsigned char * buf;
+		size_t len;
+
 		/*key, value pair*/
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen, 
 							   (const unsigned char *)STR_TENANTID, 
@@ -443,22 +443,24 @@ static int jsongen_output(wb_callback_t *cb,
 
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_close(cb->yajl_gen));
 
-		const unsigned char * buf;
-		size_t len;
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(cb->yajl_gen, &buf, &len));
 		cb->buffered_io->write(cb->buffered_io, 0xF00, buf, len);
 		/*can't use yajl_gen_reset because can link only with yajl v1 */
 		yajl_gen_clear(cb->yajl_gen);
 		yajl_gen_free(cb->yajl_gen);
-		jsongen_init(&cb->yajl_gen);
+		if ( jsongen_init(&cb->yajl_gen) !=0 ){
+			return -1;
+		}
 	}
 	return 0;
-} /* }}} int wb_value_list_to_json */
-/**************************************************************/
+}
 
-static void wb_callback_free (void *data) /* {{{ */
-{
+
+/*************blueflood plugin implementation************/
+
+static void wb_callback_free (void *data){
 	wb_callback_t *cb = data;
+	struct blueflood_transport_interface *bt = s_blueflood_transport;
 
 	if (data == NULL)
 	    return;
@@ -468,7 +470,6 @@ static void wb_callback_free (void *data) /* {{{ */
 	free(cb->buffered_io);
 
 	/*curl transport end session & destroy & finalize*/
-	struct blueflood_transport_interface *bt = s_blueflood_transport;
 	bt->end_session(bt);
 	bt->destroy(bt);
 	blueflood_curl_transport_global_finalize();
@@ -476,26 +477,25 @@ static void wb_callback_free (void *data) /* {{{ */
 	yajl_gen_clear(cb->yajl_gen);
 	yajl_gen_free(cb->yajl_gen);
 
-	sfree (cb->location);
+	sfree (cb->url);
 	sfree (cb->tenantid);
 	sfree (cb->user);
 	sfree (cb->pass);
 	sfree (cb->send_buffer);
 
 	sfree (cb);
-} /* }}} void wb_callback_free */
+}
 
-
-static int wb_write (const data_set_t *ds, const value_list_t *vl, /* {{{ */
-		     user_data_t *user_data)
-{       
+static int wb_write (const data_set_t *ds, const value_list_t *vl,
+		     user_data_t *user_data){       
 	wb_callback_t *cb;
 	int status;
 
 	if (user_data == NULL)
 	    return (-EINVAL);
 
-	cb = user_data->data; /*is it thread-safe to access user_data->data ?*/
+	/*is it thread-safe to access user_data->data before locking ?*/
+	cb = user_data->data; 
 	pthread_mutex_lock (&cb->send_lock);
 	status = jsongen_output(cb, ds, vl);
 	if ( status != 0 ){
@@ -504,12 +504,11 @@ static int wb_write (const data_set_t *ds, const value_list_t *vl, /* {{{ */
 	}
 	pthread_mutex_unlock (&cb->send_lock);
 	return (status);
-} /* }}} int wb_write */
+}
 
-static int wb_flush (cdtime_t timeout, /* {{{ */
+static int wb_flush (cdtime_t timeout,
 		     const char *identifier __attribute__((unused)),
-		     user_data_t *user_data)
-{
+		     user_data_t *user_data){
 	wb_callback_t *cb;
 	int ret=0;
 
@@ -524,16 +523,15 @@ static int wb_flush (cdtime_t timeout, /* {{{ */
 		ERROR ("%s plugin: Can't do flush, not initialized.", PLUGIN_NAME);
 	}
 	else{
-	    cb->buffered_io->flush_write(cb->buffered_io, 0xF00);
+		cb->buffered_io->flush_write(cb->buffered_io, 0xF00);
 	}
 	pthread_mutex_unlock (&cb->send_lock);
 
 	return ret;
-} /* }}} int wb_flush */
+}
 
 
-static int wb_config_url (oconfig_item_t *ci) /* {{{ */
-{
+static int wb_config_url (oconfig_item_t *ci){
 	wb_callback_t *cb;
 	user_data_t user_data;
 	int i;
@@ -546,8 +544,8 @@ static int wb_config_url (oconfig_item_t *ci) /* {{{ */
 
 	pthread_mutex_init (&cb->send_lock, /* attr = */ NULL);
 
-	cf_util_get_string (ci, &cb->location);
-	if (cb->location == NULL)
+	cf_util_get_string (ci, &cb->url);
+	if (cb->url == NULL)
 	    return (-1);
 
 	for (i = 0; i < ci->children_num; i++) {
@@ -572,7 +570,7 @@ static int wb_config_url (oconfig_item_t *ci) /* {{{ */
 	/* Allocate the buffer. */
 	cb->send_buffer = malloc(WRITE_HTTP_DEFAULT_BUFFER_SIZE);
 
-	/* Determine send_buffer_size. */
+	/* Allocate buffering engine */
 	cb->buffered_io = AllocBufferedIOWrite(cb->send_buffer, 
 					       WRITE_HTTP_DEFAULT_BUFFER_SIZE,
 					       write_send );
@@ -583,16 +581,22 @@ static int wb_config_url (oconfig_item_t *ci) /* {{{ */
 		    return (-1);
 	    }
 
-	s_blueflood_transport = blueflood_curl_transport_construct(cb->location);
+	/*Allocate CURL sending transport*/
+	s_blueflood_transport = blueflood_curl_transport_construct(cb->url);
 	if ( s_blueflood_transport == NULL ){
 		ERROR ("%s plugin: construct transport error", PLUGIN_NAME );
 		wb_callback_free (cb);
 		return -1;
 	}
-	jsongen_init(&cb->yajl_gen);
+
+	/*Allocate json generator*/
+	if ( jsongen_init(&cb->yajl_gen) != 0 ){
+		wb_callback_free (cb);
+		return -1;
+	}
 
 	DEBUG ("%s plugin: Registering write callback with URL %s",
-	       PLUGIN_NAME, cb->location);
+	       PLUGIN_NAME, cb->url);
 
 	user_data.data = cb;
 	user_data.free_func = wb_callback_free;
@@ -603,10 +607,9 @@ static int wb_config_url (oconfig_item_t *ci) /* {{{ */
 	INFO ("%s plugin: write callback registered", PLUGIN_NAME);
 
 	return (0);
-} /* }}} int wb_config_url */
+}
 
-static int wb_config (oconfig_item_t *ci) /* {{{ */
-{
+static int wb_config (oconfig_item_t *ci){
 	INFO ("%s plugin: config callback", PLUGIN_NAME);
 	int err=0;
 	int i;
@@ -618,7 +621,7 @@ static int wb_config (oconfig_item_t *ci) /* {{{ */
 				ERROR ("%s plugin: Invalid configuration for [%s], "
 				       "absent parameter/s",
 				       PLUGIN_NAME, child->key);
-			    return err;
+				return err;
 			}
 		}
 		else{
@@ -628,39 +631,38 @@ static int wb_config (oconfig_item_t *ci) /* {{{ */
 	}
 
 	return 0;
-} /* }}} int wb_config */
+}
 
-static int wb_init (void) /* {{{ */
-{
+static int wb_init (void){
+	int curl_init_err;
+
 	/* Call this while collectd is still single-threaded to avoid
 	 * initialization issues in libgcrypt. */
 	INFO ("%s plugin: init", PLUGIN_NAME);
 
-	int curl_init_err = blueflood_curl_transport_global_initialize(CURL_GLOBAL_SSL);
+	curl_init_err = blueflood_curl_transport_global_initialize(CURL_GLOBAL_SSL);
 	if ( curl_init_err != 0 ){
 		/*curl init error handling*/
 		ERROR ("%s plugin: init error::curl_global_init=%d", PLUGIN_NAME, curl_init_err );
 		return -1;
 	}
 
-        INFO ("%s plugin: init successful", PLUGIN_NAME);
-        return (0);
-} /* }}} int wb_init */
+	INFO ("%s plugin: init successful", PLUGIN_NAME);
+	return (0);
+}
 
-static int wb_shutdown (void) /* {{{ */
-{
+static int wb_shutdown (void){
 	INFO ("%s plugin: shutdown", PLUGIN_NAME);
 	blueflood_curl_transport_global_finalize();
-        INFO ("%s plugin: shutdown successful", PLUGIN_NAME);
-        return 0;
-} /* }}} int wb_shutdown */
+	INFO ("%s plugin: shutdown successful", PLUGIN_NAME);
+	return 0;
+}
 
-void module_register (void) /* {{{ */
-{       
+void module_register (void){       
 	INFO ("%s plugin: registered", PLUGIN_NAME);
-        plugin_register_complex_config (PLUGIN_NAME, wb_config);
-        plugin_register_init (PLUGIN_NAME, wb_init);
+	plugin_register_complex_config (PLUGIN_NAME, wb_config);
+	plugin_register_init (PLUGIN_NAME, wb_init);
 	plugin_register_shutdown (PLUGIN_NAME, wb_shutdown);
-} /* }}} void module_register */
+}
 
 /* vim: set fdm=marker sw=8 ts=8 tw=78 et : */
