@@ -1,9 +1,13 @@
 
 #include <string.h>
+#include <stdlib.h>
 
 #include "plugin.h"
 #include "common.h"
 #include "liboconfig/oconfig.h"
+
+
+extern void init_mock_test(int index);
 
 /*in this test collectd mock & plugin linked statically */
 
@@ -19,13 +23,14 @@ struct callbacks_blueflood{
     char *type_plugin_name;
     oconfig_item_t *config;
     user_data_t user_data;
+    int temp_count_data_values;
 };
 
 struct callbacks_blueflood s_data;
 pthread_t s_write_thread;
 pthread_t s_write_thread2;
 
-/*copied from collectD to get rid from yet another object file*/
+/*copied from collectD to get rid from linking yet another object file*/
 int cf_util_get_string (const oconfig_item_t *ci, char **ret_string) /* {{{ */
 {
 	char *string;
@@ -179,47 +184,58 @@ int plugin_register_flush (const char *name,
 /********************************************
 collectD mockuped functions*/
 
+void fill_data_values_set(data_set_t *data_set, value_list_t *value_list, int count){
+    int type, i;
+    for (i=0; i < count; i++){
+	type = random() % 4; /*base types count*/
+	if ( type == DS_TYPE_GAUGE){
+	    data_set->ds[i].type = type;
+	    value_list->values[i].gauge = (double)random();
+	}
+	else if ( type == DS_TYPE_COUNTER){
+	    data_set->ds[i].type = type;
+	    value_list->values[i].counter = random();
+	}
+	else if ( type == DS_TYPE_DERIVE){
+	    data_set->ds[i].type = type;
+	    value_list->values[i].derive = random();
+	}
+	else if ( type == DS_TYPE_ABSOLUTE){
+	    data_set->ds[i].type = type;
+	    value_list->values[i].absolute = random();
+	}
+    }
+}
 
 void *write_asynchronously(void *obj){
     struct callbacks_blueflood *data = (struct callbacks_blueflood *)obj;
     data_set_t data_set;
+    int count = data->temp_count_data_values;
+
     memset(&data_set, '\0', sizeof(data_set_t));
-    data_set.ds_num = 4;
+    data_set.ds_num = count;
     /*TODO: figure out what dataset type means*/
     strcpy(data_set.type, "type");
     data_set.ds = malloc(sizeof(data_source_t)*data_set.ds_num);
-    int i=0;
-    data_set.ds[i].type = DS_TYPE_GAUGE;
-    ++i;
-    data_set.ds[i].type = DS_TYPE_COUNTER;
-    ++i;
-    data_set.ds[i].type = DS_TYPE_DERIVE;
-    ++i;
-    data_set.ds[i].type = DS_TYPE_ABSOLUTE;
+
     value_list_t value_list;
     memset(&value_list, '\0', sizeof(value_list_t));
     strcpy(value_list.host, "host");
     strcpy(value_list.plugin, "plugin");
     strcpy(value_list.type, "type");
-    value_list.values_len = 4;
+    value_list.values_len = count;
     value_list.time = time(NULL);
     value_list.interval = 1000000*30; //30sec
-    value_list.values = malloc(sizeof(value_t)*4);
-    i=0;
-    value_list.values[i].gauge = 2.12345;
-    ++i;
-    value_list.values[i].counter = 3333;
-    ++i;
-    value_list.values[i].derive = 2;
-    ++i;
-    value_list.values[i].absolute = 2000000;
+    value_list.values = malloc(sizeof(value_t)*count);
+
+    fill_data_values_set(&data_set, &value_list, data->temp_count_data_values);
     data->plugin_write_cb( &data_set, &value_list, &data->user_data);
     return NULL;
 }
 
-
-int main(){
-    /*create plugin*/
+void template_begin(){
+    memset(&s_data, '\0', sizeof(struct callbacks_blueflood));
+   /*create plugin*/
     module_register();
     /*run config callback*/
     int config_callback_result = s_data.callback_config(s_data.config);
@@ -227,8 +243,48 @@ int main(){
     /*run init callback*/
     int init_callback_result = s_data.callback_plugin_init_cb();
     assert(init_callback_result==0);
+}
 
+void template_end(){
+    /*run free callback*/
+    s_data.user_data.free_func(s_data.user_data.data);
+    /*run shutdown callback*/
+    s_data.callback_plugin_shutdown_cb();
+}
+
+void one_big_write();
+void two_writes();
+void two_hundred_writes();
+void mock_test_1();
+
+int main(){
+#ifndef TEST_MOCK
+    one_big_write();
+    two_writes();
+    two_hundred_writes();
+#else
+    mock_test_1();
+#endif
+    return 0;
+}
+
+void one_big_write(){
+    template_begin();
     /*test writes*/
+    s_data.temp_count_data_values = 1000;
+    int ret = pthread_create(&s_write_thread, NULL, write_asynchronously, &s_data);
+    assert(0 == ret);
+    ret = pthread_join(s_write_thread, NULL);
+    assert(0 == ret);
+    /*test flush*/
+    s_data.plugin_flush_cb(0, "", &s_data.user_data);
+    template_end();
+}
+
+void two_writes(){
+    template_begin();
+    /*test writes*/
+    s_data.temp_count_data_values = 4;
     int ret = pthread_create(&s_write_thread, NULL, write_asynchronously, &s_data);
     assert(0 == ret);
     int ret2 = pthread_create(&s_write_thread2, NULL, write_asynchronously, &s_data);
@@ -237,11 +293,34 @@ int main(){
     assert(0 == ret);
     ret = pthread_join(s_write_thread2, NULL);
     assert(0 == ret2);
+
     /*test flush*/
     s_data.plugin_flush_cb(0, "", &s_data.user_data);
-    /*run free callback*/
-    s_data.user_data.free_func(s_data.user_data.data);
-    /*run shutdown callback*/
-    s_data.callback_plugin_shutdown_cb();
-    return 0;
+    template_end();
 }
+
+void two_hundred_writes(){
+    template_begin();
+    int i;
+    /*test writes*/
+    s_data.temp_count_data_values = 10;
+    for (i=0; i< 100; i++){
+	int ret = pthread_create(&s_write_thread, NULL, write_asynchronously, &s_data);
+	assert(0 == ret);
+	int ret2 = pthread_create(&s_write_thread2, NULL, write_asynchronously, &s_data);
+	assert(0 == ret2);
+	ret = pthread_join(s_write_thread, NULL);
+	assert(0 == ret);
+	ret = pthread_join(s_write_thread2, NULL);
+	assert(0 == ret2);
+    }
+    /*test flush*/
+    s_data.plugin_flush_cb(0, "", &s_data.user_data);
+    template_end();
+}
+
+#ifdef TEST_MOCK
+void mock_test_1(){
+    init_mock_test(0);
+}
+#endif //TEST_MOCK
