@@ -165,10 +165,12 @@ static int buf_write(BufferedIOWrite* self, int handle, const void* data, size_t
 }
 
 /*Create io engine with buffering facility, i/o optimizer.  alloc in
-  heap, ownership is transfered*/
+  heap, ownership is transfered
+@param f sending function, can't be a NULL*/
 static BufferedIOWrite* AllocBufferedIOWrite(void* buf, size_t size,
 					     ssize_t (*f) (int handle, const void* data, size_t size) ){
 	assert(buf);
+	if (!f) return NULL;
 	BufferedIOWrite* self = malloc( sizeof(BufferedIOWrite) );
 	if ( self == NULL ) return NULL;
 	self->data.buf = buf;
@@ -176,11 +178,7 @@ static BufferedIOWrite* AllocBufferedIOWrite(void* buf, size_t size,
 	self->data.cursor=0;
 	self->flush_write = buf_flush_write;
 	self->write = buf_write;
-	/*we can override std write function if passed function not NULL */
-	if ( f )
-	    self->write_override = f;
-	else
-	    self->write_override = write;
+	self->write_override = f;
 	return self;
 }
 
@@ -268,7 +266,7 @@ static struct blueflood_transport_interface s_blueflood_transport_interface = {
 };
 
 struct blueflood_transport_interface* blueflood_curl_transport_construct(const char *url){
-	struct blueflood_curl_transport_t *self = malloc(sizeof(struct blueflood_curl_transport_t));
+	struct blueflood_curl_transport_t *self = calloc(1, sizeof(struct blueflood_curl_transport_t));
 	self->public = s_blueflood_transport_interface;
 	self->url = strdup(url);
 	if ( self->public.construct(&self->public) == 0 )
@@ -444,6 +442,7 @@ static int jsongen_output(wb_callback_t *cb,
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_close(cb->yajl_gen));
 
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(cb->yajl_gen, &buf, &len));
+		INFO ("%s plugin: wrote %zu bytes.", PLUGIN_NAME, len);
 		cb->buffered_io->write(cb->buffered_io, 0xF00, buf, len);
 		/*can't use yajl_gen_reset because can link only with yajl v1 */
 		yajl_gen_clear(cb->yajl_gen);
@@ -458,23 +457,22 @@ static int jsongen_output(wb_callback_t *cb,
 
 /*************blueflood plugin implementation************/
 
-static void wb_callback_free (void *data){
-	wb_callback_t *cb = data;
-	struct blueflood_transport_interface *bt = s_blueflood_transport;
-
-	if (data == NULL)
-	    return;
+static void free_user_data(wb_callback_t *cb){
+	if ( !cb ) return;
 
 	/*cache flush & free memory */
-	cb->buffered_io->flush_write(cb->buffered_io, 0xF00);
-	free(cb->buffered_io);
+	if ( cb->buffered_io != NULL ){
+		cb->buffered_io->flush_write(cb->buffered_io, 0xF00);
+		free(cb->buffered_io);
+	}
 
-	/*curl transport end session & destroy & finalize*/
-	bt->end_session(bt);
-	bt->destroy(bt);
-	blueflood_curl_transport_global_finalize();
+	/*curl transport end session & destroy*/
+	if ( s_blueflood_transport!=NULL ){
+		s_blueflood_transport->end_session(s_blueflood_transport);
+		s_blueflood_transport->destroy(s_blueflood_transport);
+		s_blueflood_transport = NULL;
+	}
 
-	yajl_gen_clear(cb->yajl_gen);
 	yajl_gen_free(cb->yajl_gen);
 
 	sfree (cb->url);
@@ -486,6 +484,11 @@ static void wb_callback_free (void *data){
 	sfree (cb);
 }
 
+static void wb_callback_free (void *data){
+	INFO ("%s plugin: free", PLUGIN_NAME);
+	free_user_data((wb_callback_t *)data);
+}
+
 static int wb_write (const data_set_t *ds, const value_list_t *vl,
 		     user_data_t *user_data){       
 	wb_callback_t *cb;
@@ -494,7 +497,6 @@ static int wb_write (const data_set_t *ds, const value_list_t *vl,
 	if (user_data == NULL)
 	    return (-EINVAL);
 
-	/*is it thread-safe to access user_data->data before locking ?*/
 	cb = user_data->data; 
 	pthread_mutex_lock (&cb->send_lock);
 	status = jsongen_output(cb, ds, vl);
@@ -515,7 +517,7 @@ static int wb_flush (cdtime_t timeout,
 	if (user_data == NULL)
 	    return (-EINVAL);
 
-	cb = user_data->data; /*is it thread-safe to access user_data->data ?*/
+	cb = user_data->data;
 	pthread_mutex_lock (&cb->send_lock);
 
 	if (cb->buffered_io == NULL){
@@ -545,8 +547,6 @@ static int wb_config_url (oconfig_item_t *ci){
 	pthread_mutex_init (&cb->send_lock, /* attr = */ NULL);
 
 	cf_util_get_string (ci, &cb->url);
-	if (cb->url == NULL)
-	    return (-1);
 
 	for (i = 0; i < ci->children_num; i++) {
 		oconfig_item_t *child = ci->children + i;
@@ -563,7 +563,9 @@ static int wb_config_url (oconfig_item_t *ci){
 		}
 	}
 
-	if (!cb->tenantid || !cb->user || !cb->pass){
+	if (!cb->tenantid || !cb->user || !cb->pass || !cb->url){
+		ERROR ("%s plugin: Invalid configuration for [%s], "
+		       "absent parameter/s", PLUGIN_NAME, ci->key);
 		return -1;
 	}
 
@@ -577,7 +579,7 @@ static int wb_config_url (oconfig_item_t *ci){
 	if (cb->send_buffer == NULL || cb->buffered_io == NULL)
 	    {
 		    ERROR ("%s plugin: memory alloc failed.", PLUGIN_NAME);
-		    wb_callback_free (cb);
+		    free_user_data(cb);
 		    return (-1);
 	    }
 
@@ -585,13 +587,13 @@ static int wb_config_url (oconfig_item_t *ci){
 	s_blueflood_transport = blueflood_curl_transport_construct(cb->url);
 	if ( s_blueflood_transport == NULL ){
 		ERROR ("%s plugin: construct transport error", PLUGIN_NAME );
-		wb_callback_free (cb);
+		free_user_data(cb);
 		return -1;
 	}
 
 	/*Allocate json generator*/
 	if ( jsongen_init(&cb->yajl_gen) != 0 ){
-		wb_callback_free (cb);
+		free_user_data(cb);
 		return -1;
 	}
 
@@ -599,9 +601,12 @@ static int wb_config_url (oconfig_item_t *ci){
 	       PLUGIN_NAME, cb->url);
 
 	user_data.data = cb;
-	user_data.free_func = wb_callback_free;
 
+	/*set free_callback only once in according to plugin.c source code*/
+	user_data.free_func = NULL;
 	plugin_register_flush (PLUGIN_NAME, wb_flush, &user_data);
+
+	user_data.free_func = wb_callback_free;
 	plugin_register_write (PLUGIN_NAME, wb_write, &user_data);
 
 	INFO ("%s plugin: write callback registered", PLUGIN_NAME);
@@ -618,9 +623,6 @@ static int wb_config (oconfig_item_t *ci){
 
 		if (strcasecmp ("URL", child->key) == 0){
 			if ((err=wb_config_url (child)) != 0){
-				ERROR ("%s plugin: Invalid configuration for [%s], "
-				       "absent parameter/s",
-				       PLUGIN_NAME, child->key);
 				return err;
 			}
 		}
