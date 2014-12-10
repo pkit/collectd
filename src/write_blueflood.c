@@ -3,6 +3,7 @@
  * Copyright (C) 2009       Paul Sadauskas
  * Copyright (C) 2009       Doug MacEachern
  * Copyright (C) 2007-2014  Florian octo Forster
+ * Copyright (C) 2014       Rackspace
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -112,8 +113,8 @@ struct BufferedIOData{
 /*Repurpose file output caching for networking io, ignore file handle
   as not used*/
 typedef struct BufferedIOWrite{
-    void (*flush_write)(struct BufferedIOWrite* self, int handle);
-    int  (*write)(struct BufferedIOWrite* self, int handle, const void* data, size_t size);
+    ssize_t (*flush_write)(struct BufferedIOWrite* self, int handle);
+    ssize_t (*write)(struct BufferedIOWrite* self, int handle, const void* data, size_t size);
     ssize_t (*write_override) (int handle, const void* data, size_t size);
     struct BufferedIOData data;
 } BufferedIOWrite;
@@ -142,26 +143,28 @@ struct blueflood_transport_interface *s_blueflood_transport;
 
 /***************buffered io implementation******************/
 
-static void buf_flush_write( BufferedIOWrite* self, int handle ){
+static ssize_t buf_flush_write( BufferedIOWrite* self, int handle ){
 	if ( self->data.cursor ){
-		int b = self->write_override(handle, self->data.buf, self->data.cursor);
-		(void)b;
+		ssize_t b = self->write_override(handle, self->data.buf, self->data.cursor);
 		self->data.cursor = 0;
+		return b; //ok or error
 	}
+	return 0; //ok
 }
 
-static int buf_write(BufferedIOWrite* self, int handle, const void* data, size_t size ){
+static ssize_t buf_write(BufferedIOWrite* self, int handle, const void* data, size_t size ){
+	int flush_err=0;
+	ssize_t wrote_bytes=size;
 	WRITE_IF_BUFFER_ENOUGH(self, data, size)
 	else{
-		self->flush_write(self, handle);
+		flush_err = self->flush_write(self, handle);
 		WRITE_IF_BUFFER_ENOUGH(self, data, size)
 		else{
 			/*write directly to fd, buffer is too small*/  
-			int b = self->write_override(handle, data, size);
-			return b;
+			wrote_bytes = self->write_override(handle, data, size);
 		}
 	}
-	return size;
+	return flush_err == -1? -1: wrote_bytes;
 }
 
 /*Create io engine with buffering facility, i/o optimizer.  alloc in
@@ -189,7 +192,13 @@ static ssize_t write_send(int handle, const void* data, size_t size){
 		       s_blueflood_transport->last_error_text(s_blueflood_transport));
 		return -1;
 	}
-	return s_blueflood_transport->send(s_blueflood_transport, data, size);
+
+	if ( s_blueflood_transport->send(s_blueflood_transport, data, size) != 0 ){
+	    ERROR ("%s plugin: %s", PLUGIN_NAME, 
+		   s_blueflood_transport->last_error_text(s_blueflood_transport));
+	    return -1;
+	}
+	return size;
 }
 
 /*************blueflood transport implementation************/
@@ -211,16 +220,14 @@ static void transport_destroy(struct blueflood_transport_interface *this){
 		curl_easy_cleanup (self->curl);
 		self->curl = NULL;
 	}
+	free(self->url);
 	free(self);
 }
 
 static int transport_start_session(struct blueflood_transport_interface *this){
 	struct curl_slist *headers = NULL;
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
-	if (self->curl == NULL){
-		strncpy(self->curl_errbuf, "libcurl: curl_easy_init failed.", CURL_ERROR_SIZE );
-		return -1;
-	}
+	/*do not check here for CURL object, as it checked once in constructor*/
 	CURL_SETOPT_RETURN_ERR(CURLOPT_NOSIGNAL, 1L);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_USERAGENT, COLLECTD_USERAGENT"C");
 	
@@ -324,7 +331,6 @@ static int jsongen_map_key_value(yajl_gen gen, int ds_type,
 						   strlen(STR_VALUE)));
 	/*value's value*/
 	if ( ds_type == DS_TYPE_GAUGE ){
-
 		if(isfinite (value->gauge)){
 			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_double(gen, value->gauge));
 		}
@@ -442,8 +448,10 @@ static int jsongen_output(wb_callback_t *cb,
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_close(cb->yajl_gen));
 
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(cb->yajl_gen, &buf, &len));
-		INFO ("%s plugin: wrote %zu bytes.", PLUGIN_NAME, len);
-		cb->buffered_io->write(cb->buffered_io, 0xF00, buf, len);
+		int wrote_bytes;
+		if ( (wrote_bytes=cb->buffered_io->write(cb->buffered_io, 0xF00, buf, len)) == -1 ){
+		    ERROR ("%s plugin: failed to write %zu bytes.", PLUGIN_NAME, len);
+		}
 		/*can't use yajl_gen_reset because can link only with yajl v1 */
 		yajl_gen_clear(cb->yajl_gen);
 		yajl_gen_free(cb->yajl_gen);
@@ -519,16 +527,8 @@ static int wb_flush (cdtime_t timeout,
 
 	cb = user_data->data;
 	pthread_mutex_lock (&cb->send_lock);
-
-	if (cb->buffered_io == NULL){
-		ret=-1;
-		ERROR ("%s plugin: Can't do flush, not initialized.", PLUGIN_NAME);
-	}
-	else{
-		cb->buffered_io->flush_write(cb->buffered_io, 0xF00);
-	}
+	cb->buffered_io->flush_write(cb->buffered_io, 0xF00);
 	pthread_mutex_unlock (&cb->send_lock);
-
 	return ret;
 }
 
@@ -627,8 +627,8 @@ static int wb_config (oconfig_item_t *ci){
 			}
 		}
 		else{
-			ERROR ("%s plugin: Invalid configuration "
-			       "option: %s.", PLUGIN_NAME, child->key);
+		    ERROR ("%s plugin: Invalid configuration", PLUGIN_NAME);
+		    return -1;
 		}
 	}
 
