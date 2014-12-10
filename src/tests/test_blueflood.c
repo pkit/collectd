@@ -184,13 +184,45 @@ int plugin_register_flush (const char *name,
 /********************************************
 collectD mockuped functions*/
 
+
+void free_config(){
+    int i, j;
+    if ( s_data.config != NULL ){
+	for (i=0; i < s_data.config->children_num; i++ ){
+	    free(s_data.config->children[i].key);
+	    /*always one item*/
+	    free(s_data.config->children[i].values[0].value.string);
+	    free(s_data.config->children[i].values);
+	    for (j=0; j < s_data.config->children[i].children_num; j++){
+		free(s_data.config->children[i].children[j].key);
+		free(s_data.config->children[i].children[j].values[0].value.string);
+		free(s_data.config->children[i].children[j].values);
+	    }
+	    free(s_data.config->children[i].children);
+	}
+	free(s_data.config->children);
+	free(s_data.config), s_data.config = NULL;
+	free(s_data.type_plugin_name), s_data.type_plugin_name = NULL;
+    }
+}
+
+void free_dataset(data_set_t *data_set, value_list_t *value_list){
+    free(data_set->ds);
+    free(value_list->values);
+}
+
 void fill_data_values_set(data_set_t *data_set, value_list_t *value_list, int count){
     int type, i;
     for (i=0; i < count; i++){
 	type = random() % 4; /*base types count*/
 	if ( type == DS_TYPE_GAUGE){
 	    data_set->ds[i].type = type;
-	    value_list->values[i].gauge = (double)random();
+	    value_list->values[i].gauge = 
+#ifdef TEST_MOCK
+		HUGE_VAL; //INFINITY
+#else
+	    (double)random();
+#endif //TEST_MOCK
 	}
 	else if ( type == DS_TYPE_COUNTER){
 	    data_set->ds[i].type = type;
@@ -230,19 +262,21 @@ void *write_asynchronously(void *obj){
 
     fill_data_values_set(&data_set, &value_list, data->temp_count_data_values);
     data->plugin_write_cb( &data_set, &value_list, &data->user_data);
+    free_dataset(&data_set, &value_list);
     return NULL;
 }
 
-void template_begin(){
+void template_begin(char expected_config_result, char expected_init_result){
     memset(&s_data, '\0', sizeof(struct callbacks_blueflood));
    /*create plugin*/
     module_register();
     /*run config callback*/
     int config_callback_result = s_data.callback_config(s_data.config);
-    assert(config_callback_result==0);
+    assert(config_callback_result==expected_config_result);
+    if ( config_callback_result != 0 ) return; 
     /*run init callback*/
     int init_callback_result = s_data.callback_plugin_init_cb();
-    assert(init_callback_result==0);
+    assert(init_callback_result==expected_init_result);
 }
 
 void template_end(){
@@ -250,12 +284,21 @@ void template_end(){
     s_data.user_data.free_func(s_data.user_data.data);
     /*run shutdown callback*/
     s_data.callback_plugin_shutdown_cb();
+    /*free memories*/
+    free_config();
 }
 
 void one_big_write();
 void two_writes();
 void two_hundred_writes();
-void mock_test_1();
+void mock_test_0_construct_transport_error_curl_easy_init();
+void mock_test_1_construct_transport_error_yajl_gen_alloc();
+void mock_test_1_construct_transport_error_invalid_config();
+void mock_test_1_construct_transport_error_invalid_config2();
+void mock_test_2_init_callback_curl_global_init();
+void mock_test_3_write_callback_yajl_gen_alloc();
+void mock_test_4_write_callback_curl_easy_perform();
+void mock_test_5_write_callback_curl_easy_setopt();
 
 int main(){
 #ifndef TEST_MOCK
@@ -263,13 +306,20 @@ int main(){
     two_writes();
     two_hundred_writes();
 #else
-    mock_test_1();
+    mock_test_0_construct_transport_error_curl_easy_init();
+    mock_test_1_construct_transport_error_yajl_gen_alloc();
+    mock_test_1_construct_transport_error_invalid_config();
+    mock_test_1_construct_transport_error_invalid_config2();
+    mock_test_2_init_callback_curl_global_init();
+    mock_test_3_write_callback_yajl_gen_alloc();
+    mock_test_4_write_callback_curl_easy_perform();
+    mock_test_5_write_callback_curl_easy_setopt();
 #endif
     return 0;
 }
 
 void one_big_write(){
-    template_begin();
+    template_begin(0, 0);
     /*test writes*/
     s_data.temp_count_data_values = 1000;
     int ret = pthread_create(&s_write_thread, NULL, write_asynchronously, &s_data);
@@ -282,7 +332,7 @@ void one_big_write(){
 }
 
 void two_writes(){
-    template_begin();
+    template_begin(0, 0);
     /*test writes*/
     s_data.temp_count_data_values = 4;
     int ret = pthread_create(&s_write_thread, NULL, write_asynchronously, &s_data);
@@ -300,7 +350,7 @@ void two_writes(){
 }
 
 void two_hundred_writes(){
-    template_begin();
+    template_begin(0,0);
     int i;
     /*test writes*/
     s_data.temp_count_data_values = 10;
@@ -320,7 +370,79 @@ void two_hundred_writes(){
 }
 
 #ifdef TEST_MOCK
-void mock_test_1(){
+
+void mock_test_0_construct_transport_error_curl_easy_init(){
     init_mock_test(0);
+    template_begin(-1,0);
+    free_config();
 }
+void mock_test_1_construct_transport_error_yajl_gen_alloc(){
+    init_mock_test(1);
+    template_begin(-1,0);
+    free_config();
+}
+
+void mock_test_1_construct_transport_error_invalid_config(){
+    init_mock_test(1);
+    memset(&s_data, '\0', sizeof(struct callbacks_blueflood));
+   /*create plugin*/
+    module_register();
+
+    /*inject error as absent value*/
+    free(s_data.config->children[0].key);
+    s_data.config->children[0].key = strdup("");
+
+    /*run config callback*/
+    int config_callback_result = s_data.callback_config(s_data.config);
+    assert(config_callback_result==-1);
+    free_config();
+}
+
+void mock_test_1_construct_transport_error_invalid_config2(){
+    init_mock_test(1);
+    memset(&s_data, '\0', sizeof(struct callbacks_blueflood));
+   /*create plugin*/
+    module_register();
+
+    /*inject error as wrong key*/
+    free(s_data.config->children[0].children[0].key);
+    s_data.config->children[0].children[0].key = strdup("foo");
+
+    /*run config callback*/
+    int config_callback_result = s_data.callback_config(s_data.config);
+    assert(config_callback_result==-1);
+    free_config();
+}
+void mock_test_2_init_callback_curl_global_init(){
+    init_mock_test(2);
+    template_begin(0,-1);
+    free_config();
+}
+void mock_test_3_write_callback_yajl_gen_alloc(){
+    init_mock_test(3);
+    template_begin(0,0);
+    /*inject yajl_gen_alloc error inside of write*/
+    init_mock_test(1);
+   /*test writes*/
+    s_data.temp_count_data_values = 4;
+    write_asynchronously(&s_data);  /*just synchronous write*/
+    template_end();
+}
+void mock_test_4_write_callback_curl_easy_perform(){
+    init_mock_test(4);
+    template_begin(0,0);
+   /*test writes*/
+    s_data.temp_count_data_values = 4;
+    write_asynchronously(&s_data);  /*just synchronous write*/
+    template_end();
+}
+void mock_test_5_write_callback_curl_easy_setopt(){
+    init_mock_test(5);
+    template_begin(0,0);
+   /*test writes*/
+    s_data.temp_count_data_values = 4;
+    write_asynchronously(&s_data);  /*just synchronous write*/
+    template_end();
+}
+
 #endif //TEST_MOCK

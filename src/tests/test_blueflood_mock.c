@@ -16,8 +16,9 @@ enum { YAJL_GEN_ALLOC=0, YAJL_GEN_CONFIG, YAJL_GEN_MAP_OPEN, YAJL_GEN_MAP_CLOSE,
 
 /*table of functions results*/
 #define MOCK_VALUES_COUNT 10
+#define NOMEMORY 1
 const intptr_t s_mocks_logic_matrix[MOCKS_COUNT][MOCK_VALUES_COUNT] = {
-    {0, 0, 0, 0, 0, 0, 0, 0, 0}, /*YAJL_GEN_ALLOC*/
+    {1, 0, 1, 1, 1, 1, 1, 1, 1}, /*YAJL_GEN_ALLOC;  0:error, 1:ok*/
     {0, 0, 0, 0, 0, 0, 0, 0, 0}, /*YAJL_GEN_CONFIG*/
     {0, 0, 0, 0, 0, 0, 0, 0, 0}, /*YAJL_GEN_MAP_OPEN*/
     {0, 0, 0, 0, 0, 0, 0, 0, 0}, /*YAJL_GEN_MAP_CLOSE*/
@@ -28,10 +29,10 @@ const intptr_t s_mocks_logic_matrix[MOCKS_COUNT][MOCK_VALUES_COUNT] = {
     {0, 0, 0, 0, 0, 0, 0, 0, 0}, /*YAJL_GEN_INTEGER*/
     {0, 0, 0, 0, 0, 0, 0, 0, 0}, /*YAJL_GEN_DOUBLE*/
     {0, 0, 0, 0, 0, 0, 0, 0, 0}, /*YAJL_GEN_GET_BUF*/
-    {0, 0, 0, 0, 0, 0, 0, 0, 0}, /*CURL_EASY_SETOPT*/
-    {0, 0, 0, 0, 0, 0, 0, 0, 0}, /*CURL_EASY_INIT*/
-    {0, 0, 0, 0, 0, 0, 0, 0, 0}, /*CURL_EASY_PERFORM*/
-    {0, 0, 0, 0, 0, 0, 0, 0, 0} /*CURL_GLOBAL_INIT*/
+    {0, 0, 0, 0, 0,-1, 0, 0, 0}, /*CURL_EASY_SETOPT; 0:ok, -1:error*/
+    {0, 1, 1, 1, 1, 1, 1, 1, 1}, /*CURL_EASY_INIT;   0:error, 1:ok*/
+    {0, 0, 0, 0, 1, 0, 0, 0, 0}, /*CURL_EASY_PERFORM 0:ok, 1:error*/
+    {0, 0,-1, 0, 0, 0, 0, 0, 0} /*CURL_GLOBAL_INIT; 0:ok, -1:error*/
 };
 int s_test_index=0;
 

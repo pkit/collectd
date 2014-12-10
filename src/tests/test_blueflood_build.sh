@@ -6,7 +6,8 @@ GCOV_LDFLAGS="-fprofile-arcs"
 
 #real curl
 CFLAGS="-I./src -I./src/daemon -D HAVE_CONFIG_H -g -O0 -Werror -Wall $GCOV_FLAGS"
-rm test_blueflood ./src/tests/test_blueflood2.o ./src/tests/test_blueflood2.gcda -f
+rm test_blueflood ./src/tests/test_blueflood2.o -f
+find -name "*.gcno" -or -name "*.gcda" | xargs rm -f
 gcc -c ./src/tests/mock/plugin.c -o ./src/tests/mock/plugin.o $CFLAGS
 gcc -c ./src/tests/test_blueflood2.c -o ./src/tests/test_blueflood2.o $CFLAGS
 gcc -o $CURDIR/test_blueflood ./src/tests/test_blueflood2.o ./src/tests/mock/plugin.o -lyajl -lcurl -lpthread $GCOV_LDFLAGS
