@@ -64,12 +64,12 @@
     }
 
 /*literals for json output*/
-#define STR_NAME "name"
-#define STR_VALUE "value"
+#define STR_NAME "metricName"
+#define STR_VALUE "metricValue"
 #define STR_COUNTER "counter"
-#define STR_TENANTID "tenantId"
-#define STR_TIMESTAMP "timestamp"
-#define STR_FLUSH_INTERVAL "flushInterval"
+//#define STR_TENANTID "tenantId"
+#define STR_TIMESTAMP "collectionTime"
+#define STR_FLUSH_INTERVAL "ttlInSeconds"
 
 #define STR_COUNTERS "counters"
 #define STR_GAUGES "gauges"
@@ -228,8 +228,8 @@ static int jsongen_map_key_value(yajl_gen gen, data_source_t *ds,
 	format_name(name_buffer, sizeof (name_buffer),
 		    vl->host, vl->plugin, vl->plugin_instance,
 		    vl->type, vl->type_instance);
-	strcat(name_buffer, "/" );
-	strcat(name_buffer, ds->name);
+	strncat(name_buffer, "/", 1);
+	strncat(name_buffer, ds->name, DATA_MAX_NAME_LEN);
 
 	/*name's value*/
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
@@ -290,6 +290,11 @@ static int send_json_freemem(yajl_gen *gen){
 		       s_blueflood_transport->last_error_text(s_blueflood_transport));
 	}
 	yajl_gen_free(*gen), *gen = NULL;
+
+	/*Allocate json generator*/
+	if ( jsongen_init(gen) != 0 ){
+		return -1;
+	}
 	return 0;
 }
 
@@ -312,12 +317,12 @@ static int jsongen_output(wb_callback_t *cb,
 		jsongen_map_key_value(cb->yajl_gen, &ds->ds[i], vl, &vl->values[i]);
 
 		/*key, value pair*/
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
-							   (const unsigned char *)STR_TENANTID,
-							   strlen(STR_TENANTID)));
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
-							   (const unsigned char *)cb->tenantid,
-							   strlen(cb->tenantid)));
+//		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
+//							   (const unsigned char *)STR_TENANTID,
+//							   strlen(STR_TENANTID)));
+//		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
+//							   (const unsigned char *)cb->tenantid,
+//							   strlen(cb->tenantid)));
 		/*key, value pair*/
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
 							   (const unsigned char *)STR_TIMESTAMP,
