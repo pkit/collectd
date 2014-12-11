@@ -45,14 +45,7 @@
 #endif
 
 #define PLUGIN_NAME "write_blueflood"
-
-/*used by buffer io*/
-#define WRITE_IF_BUFFER_ENOUGH(iowrite, data, size)			\
-    if ( size <= iowrite->data.bufmax - iowrite->data.cursor ){		\
-	    /*buffer is enough to write data*/				\
-	    memcpy( iowrite->data.buf + iowrite->data.cursor, data, size ); \
-	    iowrite->data.cursor += size;				\
-    }
+#define MAX_METRIC_NAME_SIZE (6*DATA_MAX_NAME_LEN)
 
 /*used by transport*/
 #define CURL_SETOPT_RETURN_ERR(option, parameter){			\
@@ -70,7 +63,6 @@
 	    }					\
     }
 
-
 /*literals for json output*/
 #define STR_NAME "name"
 #define STR_VALUE "value"
@@ -84,9 +76,6 @@
 #define STR_DERIVES "derives"
 #define STR_ABSOLUTES "absolutes"
 
-/*forward declarations*/
-struct BufferedIOWrite;
-
 typedef struct wb_callback_s
 {
     char *url;
@@ -94,30 +83,9 @@ typedef struct wb_callback_s
     char *pass;
     char *tenantid;
 
-    struct BufferedIOWrite* buffered_io;
     yajl_gen yajl_gen;
-
-    char *send_buffer;
     pthread_mutex_t send_lock;
 } wb_callback_t;
-
-/***************buffered io declaration*********************/
-
-/*declaration of buffer IO*/
-struct BufferedIOData{
-    char* buf;
-    int   bufmax;
-    int   cursor;
-};
-
-/*Repurpose file output caching for networking io, ignore file handle
-  as not used*/
-typedef struct BufferedIOWrite{
-    ssize_t (*flush_write)(struct BufferedIOWrite* self, int handle);
-    ssize_t (*write)(struct BufferedIOWrite* self, int handle, const void* data, size_t size);
-    ssize_t (*write_override) (int handle, const void* data, size_t size);
-    struct BufferedIOData data;
-} BufferedIOWrite;
 
 /****************curl transport declaration*****************/
 struct blueflood_transport_interface {
@@ -125,7 +93,7 @@ struct blueflood_transport_interface {
     void (*destroy)(struct blueflood_transport_interface *this);
     int  (*start_session)(struct blueflood_transport_interface *this);
     void (*end_session)(struct blueflood_transport_interface *this);
-    int  (*send)(struct blueflood_transport_interface *this, const char *buffer, int len);
+    int  (*send)(struct blueflood_transport_interface *this, const char *buffer, size_t len);
     const char *(*last_error_text)(struct blueflood_transport_interface *this);
 };
 
@@ -139,67 +107,6 @@ struct blueflood_curl_transport_t{
 
 /*global variables*/
 struct blueflood_transport_interface *s_blueflood_transport;
-
-
-/***************buffered io implementation******************/
-
-static ssize_t buf_flush_write( BufferedIOWrite* self, int handle ){
-	if ( self->data.cursor ){
-		ssize_t b = self->write_override(handle, self->data.buf, self->data.cursor);
-		self->data.cursor = 0;
-		return b; //ok or error
-	}
-	return 0; //ok
-}
-
-static ssize_t buf_write(BufferedIOWrite* self, int handle, const void* data, size_t size ){
-	int flush_err=0;
-	ssize_t wrote_bytes=size;
-	WRITE_IF_BUFFER_ENOUGH(self, data, size)
-	else{
-		flush_err = self->flush_write(self, handle);
-		WRITE_IF_BUFFER_ENOUGH(self, data, size)
-		else{
-			/*write directly to fd, buffer is too small*/  
-			wrote_bytes = self->write_override(handle, data, size);
-		}
-	}
-	return flush_err == -1? -1: wrote_bytes;
-}
-
-/*Create io engine with buffering facility, i/o optimizer.  alloc in
-  heap, ownership is transfered
-@param f sending function, can't be a NULL*/
-static BufferedIOWrite* AllocBufferedIOWrite(void* buf, size_t size,
-					     ssize_t (*f) (int handle, const void* data, size_t size) ){
-	assert(buf);
-	if (!f) return NULL;
-	BufferedIOWrite* self = malloc( sizeof(BufferedIOWrite) );
-	if ( self == NULL ) return NULL;
-	self->data.buf = buf;
-	self->data.bufmax = size;
-	self->data.cursor=0;
-	self->flush_write = buf_flush_write;
-	self->write = buf_write;
-	self->write_override = f;
-	return self;
-}
-
-/*@param handle is not using*/
-static ssize_t write_send(int handle, const void* data, size_t size){
-	if ( (s_blueflood_transport->start_session(s_blueflood_transport)) != 0 ){
-		ERROR ("%s plugin: %s", PLUGIN_NAME, 
-		       s_blueflood_transport->last_error_text(s_blueflood_transport));
-		return -1;
-	}
-
-	if ( s_blueflood_transport->send(s_blueflood_transport, data, size) != 0 ){
-	    ERROR ("%s plugin: %s", PLUGIN_NAME, 
-		   s_blueflood_transport->last_error_text(s_blueflood_transport));
-	    return -1;
-	}
-	return size;
-}
 
 /*************blueflood transport implementation************/
 
@@ -241,7 +148,7 @@ static int transport_start_session(struct blueflood_transport_interface *this){
 	return 0;
 }
 
-static int transport_send(struct blueflood_transport_interface *this, const char *buffer, int len){
+static int transport_send(struct blueflood_transport_interface *this, const char *buffer, size_t len){
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
 	CURLcode status = 0;
 
@@ -308,10 +215,10 @@ static int jsongen_init(yajl_gen *gen){
 	}
 }
 
-static int jsongen_map_key_value(yajl_gen gen, int ds_type, 
+static int jsongen_map_key_value(yajl_gen gen, data_source_t *ds,
 				 const value_list_t *vl, const value_t *value)
 {
-	char name_buffer[5 * DATA_MAX_NAME_LEN];
+	char name_buffer[MAX_METRIC_NAME_SIZE];
 
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_open(gen));
 	/*name's key*/
@@ -321,6 +228,9 @@ static int jsongen_map_key_value(yajl_gen gen, int ds_type,
 	format_name(name_buffer, sizeof (name_buffer),
 		    vl->host, vl->plugin, vl->plugin_instance,
 		    vl->type, vl->type_instance);
+	strcat(name_buffer, "/" );
+	strcat(name_buffer, ds->name);
+
 	/*name's value*/
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
 						   (const unsigned char *)name_buffer, 
@@ -330,7 +240,7 @@ static int jsongen_map_key_value(yajl_gen gen, int ds_type,
 						   (const unsigned char *)STR_VALUE, 
 						   strlen(STR_VALUE)));
 	/*value's value*/
-	if ( ds_type == DS_TYPE_GAUGE ){
+	if ( ds->type == DS_TYPE_GAUGE ){
 		if(isfinite (value->gauge)){
 			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_double(gen, value->gauge));
 		}
@@ -338,127 +248,93 @@ static int jsongen_map_key_value(yajl_gen gen, int ds_type,
 			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_null(gen));
 		}
 	}
-	else if ( ds_type == DS_TYPE_COUNTER ){
+	else if ( ds->type == DS_TYPE_COUNTER ){
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_integer(gen, value->counter));
 	}
-	else if ( ds_type == DS_TYPE_ABSOLUTE ){
+	else if ( ds->type == DS_TYPE_ABSOLUTE ){
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_integer(gen, value->absolute));
 	}
-	else if ( ds_type == DS_TYPE_DERIVE ){
+	else if ( ds->type == DS_TYPE_DERIVE ){
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_double(gen, value->derive));
 	}
 	else{
-		assert(0);
+		WARNING ("%s plugin: can't handle unknown ds_type=%d", PLUGIN_NAME, ds->type);
 	}
-	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_close(gen));
 	return 0;
 }
 
-static int jsongen_metric_array(yajl_gen gen, char items_count, int ds_type, 
-				const value_list_t *vl, const value_t *value ){
-	if ( !items_count ){
-		/*map's key*/
-		if ( ds_type == DS_TYPE_GAUGE ){
-			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
-								   (const unsigned char *)STR_GAUGES, 
-								   strlen(STR_GAUGES)));
-		}
-		else if ( ds_type == DS_TYPE_COUNTER ){
-			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
-								   (const unsigned char *)STR_COUNTERS, 
-								   strlen(STR_COUNTERS)));
-		}
-		else if ( ds_type == DS_TYPE_ABSOLUTE ){
-			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
-								   (const unsigned char *)STR_ABSOLUTES, 
-								   strlen(STR_ABSOLUTES)));
-		}
-		else if ( ds_type == DS_TYPE_DERIVE ){
-			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
-								   (const unsigned char *)STR_DERIVES, 
-								   strlen(STR_DERIVES)));
-		}
-		else{
-			assert(0);
-		}
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_array_open(gen));
+static int send_json_freemem(yajl_gen *gen){
+	const unsigned char *buf;
+	size_t len;
+	/*cache flush & free memory */
+	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(*gen, &buf, &len));
+
+	/* don't add anything to buffer if we don't have any data.*/
+	if (len>0){
+		/*end of json*/
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_array_close(*gen));
 	}
 
-	/*map items*/
-	jsongen_map_key_value(gen, ds_type, vl, value);
+	if ( (s_blueflood_transport->start_session(s_blueflood_transport)) != 0 ){
+		ERROR ("%s plugin: %s", PLUGIN_NAME, 
+		       s_blueflood_transport->last_error_text(s_blueflood_transport));
+		return -1;
+	}
 
-	return yajl_gen_status_ok;
+	/*cache flush & free memory */
+	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(*gen, &buf, &len));
+
+	if ( len >0 && 
+	     s_blueflood_transport->send(s_blueflood_transport, (const char *)buf, len) != 0 ){
+		ERROR ("%s plugin: Metrics (len=%zu) send error: %s", PLUGIN_NAME, len,
+		       s_blueflood_transport->last_error_text(s_blueflood_transport));
+	}
+	yajl_gen_free(*gen), *gen = NULL;
+	return 0;
 }
 
 static int jsongen_output(wb_callback_t *cb, 
 			  const data_set_t *ds, 
 			  const value_list_t *vl )
 {
-	int overall_items_count_added=0;
-	int i, k;
+	static int overall_items_count_added=0;
+	int i;
 
-	const int ds_types[] = { DS_TYPE_GAUGE, DS_TYPE_COUNTER, DS_TYPE_DERIVE, DS_TYPE_ABSOLUTE };
-	/* All value lists have a leading comma. The first one will be replaced with
-	 * a square bracket in `format_json_finalize'. */
+	const unsigned char *buf;
+	size_t len;
+	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(cb->yajl_gen, &buf, &len));
+	if ( !len ){
+		/*json beginning*/
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_array_open(cb->yajl_gen));
+	}
+	
 	for (i = 0; i < ds->ds_num; i++){
-		/*use yet another loop to group metrics by type*/
-		int items_count_by_type=0;
-		for (k=0; k < sizeof(ds_types)/sizeof(*ds_types); k++){
-			if (ds->ds[i].type == ds_types[k]){
-				if (!overall_items_count_added){
-					/*json beginning*/
-					YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_open(cb->yajl_gen));
-				}
-				/*generate map and array's start, item array, increment items_count_by_type*/
-				YAJL_CHECK_RETURN_ON_ERROR(jsongen_metric_array(cb->yajl_gen, items_count_by_type, 
-										ds->ds[i].type, vl, &vl->values[i] ));
-				++items_count_by_type, ++overall_items_count_added;
-			}
-		}
-		if (items_count_by_type){
-			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_array_close( cb->yajl_gen));
-		}
-	} /* for ds->ds_num */
-
-	/* don't add anything to buffer if we don't have any data.*/
-	if (overall_items_count_added){
-		const unsigned char * buf;
-		size_t len;
+		jsongen_map_key_value(cb->yajl_gen, &ds->ds[i], vl, &vl->values[i]);
 
 		/*key, value pair*/
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen, 
-							   (const unsigned char *)STR_TENANTID, 
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
+							   (const unsigned char *)STR_TENANTID,
 							   strlen(STR_TENANTID)));
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen, 
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
 							   (const unsigned char *)cb->tenantid,
 							   strlen(cb->tenantid)));
 		/*key, value pair*/
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen, 
-							   (const unsigned char *)STR_TIMESTAMP, 
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
+							   (const unsigned char *)STR_TIMESTAMP,
 							   strlen(STR_TIMESTAMP)));
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_integer(cb->yajl_gen, 
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_integer(cb->yajl_gen,
 							    CDTIME_T_TO_MS (vl->time)));
 		/*key, value pair*/
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen, 
-							   (const unsigned char *)STR_FLUSH_INTERVAL, 
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
+							   (const unsigned char *)STR_FLUSH_INTERVAL,
 							   strlen(STR_FLUSH_INTERVAL)));
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_integer(cb->yajl_gen, 
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_integer(cb->yajl_gen,
 							    CDTIME_T_TO_MS (vl->interval)));
 
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_close(cb->yajl_gen));
-
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(cb->yajl_gen, &buf, &len));
-		int wrote_bytes;
-		if ( (wrote_bytes=cb->buffered_io->write(cb->buffered_io, 0xF00, buf, len)) == -1 ){
-		    ERROR ("%s plugin: failed to write %zu bytes.", PLUGIN_NAME, len);
-		}
-		/*can't use yajl_gen_reset because can link only with yajl v1 */
-		yajl_gen_clear(cb->yajl_gen);
-		yajl_gen_free(cb->yajl_gen);
-		if ( jsongen_init(&cb->yajl_gen) !=0 ){
-			return -1;
-		}
+		++overall_items_count_added;
 	}
+
 	return 0;
 }
 
@@ -468,10 +344,8 @@ static int jsongen_output(wb_callback_t *cb,
 static void free_user_data(wb_callback_t *cb){
 	if ( !cb ) return;
 
-	/*cache flush & free memory */
-	if ( cb->buffered_io != NULL ){
-		cb->buffered_io->flush_write(cb->buffered_io, 0xF00);
-		free(cb->buffered_io);
+	if ( cb->yajl_gen != NULL ){
+	    send_json_freemem(&cb->yajl_gen);
 	}
 
 	/*curl transport end session & destroy*/
@@ -481,13 +355,10 @@ static void free_user_data(wb_callback_t *cb){
 		s_blueflood_transport = NULL;
 	}
 
-	yajl_gen_free(cb->yajl_gen);
-
 	sfree (cb->url);
 	sfree (cb->tenantid);
 	sfree (cb->user);
 	sfree (cb->pass);
-	sfree (cb->send_buffer);
 
 	sfree (cb);
 }
@@ -502,7 +373,7 @@ static int wb_write (const data_set_t *ds, const value_list_t *vl,
 	wb_callback_t *cb;
 	int status;
 
-	if (user_data == NULL)
+	if (user_data == NULL || user_data->data == NULL)
 	    return (-EINVAL);
 
 	cb = user_data->data; 
@@ -522,12 +393,12 @@ static int wb_flush (cdtime_t timeout,
 	wb_callback_t *cb;
 	int ret=0;
 
-	if (user_data == NULL)
+	if (user_data == NULL || user_data->data == NULL)
 	    return (-EINVAL);
 
 	cb = user_data->data;
 	pthread_mutex_lock (&cb->send_lock);
-	cb->buffered_io->flush_write(cb->buffered_io, 0xF00);
+	send_json_freemem(&cb->yajl_gen);
 	pthread_mutex_unlock (&cb->send_lock);
 	return ret;
 }
@@ -568,20 +439,6 @@ static int wb_config_url (oconfig_item_t *ci){
 		       "absent parameter/s", PLUGIN_NAME, ci->key);
 		return -1;
 	}
-
-	/* Allocate the buffer. */
-	cb->send_buffer = malloc(WRITE_HTTP_DEFAULT_BUFFER_SIZE);
-
-	/* Allocate buffering engine */
-	cb->buffered_io = AllocBufferedIOWrite(cb->send_buffer, 
-					       WRITE_HTTP_DEFAULT_BUFFER_SIZE,
-					       write_send );
-	if (cb->send_buffer == NULL || cb->buffered_io == NULL)
-	    {
-		    ERROR ("%s plugin: memory alloc failed.", PLUGIN_NAME);
-		    free_user_data(cb);
-		    return (-1);
-	    }
 
 	/*Allocate CURL sending transport*/
 	s_blueflood_transport = blueflood_curl_transport_construct(cb->url);
