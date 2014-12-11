@@ -216,6 +216,7 @@ void fill_data_values_set(data_set_t *data_set, value_list_t *value_list, int co
     for (i=0; i < count; i++){
 	type = random() % 4; /*base types count*/
 	if ( type == DS_TYPE_GAUGE){
+	    strcpy(data_set->ds[i].name, "test_type");
 	    data_set->ds[i].type = type;
 	    value_list->values[i].gauge = 
 #ifdef TEST_MOCK
@@ -224,6 +225,11 @@ void fill_data_values_set(data_set_t *data_set, value_list_t *value_list, int co
 	    (double)random();
 #endif //TEST_MOCK
 	}
+#ifdef TEST_MOCK
+	else{
+	    data_set->ds[i].type = 100; //unknown data type
+	}
+#else
 	else if ( type == DS_TYPE_COUNTER){
 	    data_set->ds[i].type = type;
 	    value_list->values[i].counter = random();
@@ -236,6 +242,7 @@ void fill_data_values_set(data_set_t *data_set, value_list_t *value_list, int co
 	    data_set->ds[i].type = type;
 	    value_list->values[i].absolute = random();
 	}
+#endif
     }
 }
 
@@ -282,6 +289,7 @@ void template_begin(char expected_config_result, char expected_init_result){
 void template_end(){
     /*run free callback*/
     s_data.user_data.free_func(s_data.user_data.data);
+    s_data.user_data.data = NULL;
     /*run shutdown callback*/
     s_data.callback_plugin_shutdown_cb();
     /*free memories*/
@@ -329,6 +337,10 @@ void one_big_write(){
     /*test flush*/
     s_data.plugin_flush_cb(0, "", &s_data.user_data);
     template_end();
+    ret = s_data.plugin_write_cb(NULL, NULL, &s_data.user_data);
+    assert(ret == -EINVAL);
+    ret = s_data.plugin_flush_cb(0, "", &s_data.user_data);
+    assert(ret == -EINVAL);
 }
 
 void two_writes(){
