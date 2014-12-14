@@ -126,14 +126,8 @@ static char *json_get_key(const char **path, const char *buff)
 		return NULL;
 	}
 	str_val_p = YAJL_GET_STRING(yajl_tree_get(node, path, yajl_t_string));
-	if (str_val_p && strlen(str_val_p) > 0)
-	{
-		str_val = malloc(strlen(str_val_p + 1));
-		memcpy(str_val, str_val_p, strlen(str_val_p) + 1);
-	} else
-	{
-		yajl_tree_free(node);
-		return NULL;
+	if (str_val_p && strlen(str_val_p) > 0) {
+	    str_val = strndup(str_val_p, strlen(str_val_p));
 	}
 	yajl_tree_free(node);
 	return str_val;
@@ -142,29 +136,35 @@ static char *json_get_key(const char **path, const char *buff)
 static size_t
 curl_callback(void *contents, size_t size, size_t nmemb, void *userp)
 {
-  size_t realsize = size * nmemb;
-  struct MemoryStruct *mem = (struct MemoryStruct *)userp;
- 
-  memcpy(&mem->memory[mem->size], contents, realsize);
-  mem->size += realsize;
-  mem->memory[mem->size] = 0;
- 
-  return realsize;
+    size_t realsize = size * nmemb;
+    struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+
+    // hope that realsize > 0 and (mem->size + realsize + 1) < MAX_INT
+    // are checked in libcurl...
+    mem->memory = realloc(mem->memory, mem->size + realsize + 1);
+    if (mem->memory == NULL) {
+        ERROR("%s plugin: not enough memory", PLUGIN_NAME);
+        return 0;
+    }
+    memcpy(&mem->memory[mem->size], contents, realsize);
+    mem->size += realsize;
+    mem->memory[mem->size] = 0;
+    return realsize;
 }
 
-const char* auth(const char* url, const char* user, const char* key) {
+static char* auth(const char* url, const char* user, const char* key) {
     CURL *curl;
     CURLcode res;
     char* token = NULL;
- 
+    char inbuffer[WRITE_HTTP_DEFAULT_BUFFER_SIZE];
+    struct MemoryStruct chunk;
+    struct curl_slist *headers = NULL;
+    const char* token_xpath[] = {"access", "token", "id", (const char* )0};
+
     curl = curl_easy_init();
     if (curl) {
-    	char inbuffer[1024]; // used for sending auth json, 1024 is pretty enough
-    	// TODO replace with dynamic malloc/realloc in `curl_callback`
-    	char outbuffer[512 * 1024]; // used for storing response, typical values ~15K
         curl_easy_setopt(curl, CURLOPT_URL, url);
-        struct MemoryStruct chunk;
-        chunk.memory = outbuffer;
+        chunk.memory = malloc(WRITE_HTTP_DEFAULT_BUFFER_SIZE);
         chunk.size = 0;
         
         sprintf(inbuffer, rax_auth_template, user, key);
@@ -172,7 +172,6 @@ const char* auth(const char* url, const char* user, const char* key) {
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
 
-        struct curl_slist *headers = NULL;
         headers = curl_slist_append (headers, "Accept:  */*");
         headers = curl_slist_append (headers, "Content-Type: application/json");
         headers = curl_slist_append (headers, "Expect:");
@@ -180,13 +179,14 @@ const char* auth(const char* url, const char* user, const char* key) {
 
         res = curl_easy_perform(curl);
         /* Check for errors */ 
-        if (res != CURLE_OK)
-            fprintf(stderr, "curl_easy_perform() failed: %s\n",
-              curl_easy_strerror(res));
-
-        const char* token_xpath[] = {"access", "token", "id", (const char* )0};
-        token = strdup(json_get_key(token_xpath, outbuffer));
- 
+        if (res != CURLE_OK) {
+            ERROR("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+            return NULL;
+        }
+        token = json_get_key(token_xpath, chunk->memory);
+        if (chunk->memory != NULL) {
+            free(chunk->memory);
+        }
         /* always cleanup */ 
         curl_easy_cleanup(curl);
     }
@@ -248,6 +248,7 @@ static void transport_destroy(struct blueflood_transport_interface *this){
 static int transport_start_session(struct blueflood_transport_interface *this){
 	struct curl_slist *headers = NULL;
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
+	char *auth_header = NULL;
 	/*do not check here for CURL object, as it checked once in constructor*/
 	CURL_SETOPT_RETURN_ERR(CURLOPT_NOSIGNAL, 1L);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_USERAGENT, COLLECTD_USERAGENT"C");
@@ -257,9 +258,8 @@ static int transport_start_session(struct blueflood_transport_interface *this){
 	headers = curl_slist_append (headers, "Expect:");
 	
 	if (self->token) {
-		char buffer[128];
-		snprintf(buffer, sizeof(buffer), "X-Auth-Token: %s", self->token);
-		headers = curl_slist_append (headers, buffer);
+	    auth_header = strncat("X-Auth-Token: ", self->token, strlen(self->token));
+	    headers = curl_slist_append (headers, auth_header);
 	}
 
 	CURL_SETOPT_RETURN_ERR(CURLOPT_HTTPHEADER, headers);
@@ -284,14 +284,16 @@ static int transport_send(struct blueflood_transport_interface *this, const char
 	int code = 200;
 	curl_easy_getinfo(self->curl, CURLINFO_RESPONSE_CODE, &code);
 	if (code == 401) {
-		free(self->token);
-		self->token = strdup((char*)auth(self->auth_url, self->user, self->pass));
+	    if (self->token != NULL) {
+	        free(self->token);
+	    }
+		self->token = auth(self->auth_url, self->user, self->pass);
 
 		// TODO refactor
 		status = curl_easy_perform (self->curl);
 		if (status != CURLE_OK){
 			strncpy(self->curl_errbuf, "libcurl: curl_easy_perform failed.", CURL_ERROR_SIZE );
-		}		
+		}
 	}
 
 	return status;
@@ -370,8 +372,8 @@ static int jsongen_map_key_value(yajl_gen gen, data_source_t *ds,
 	format_name(name_buffer, sizeof (name_buffer),
 		    vl->host, vl->plugin, vl->plugin_instance,
 		    vl->type, vl->type_instance);
-	strcat(name_buffer, "/" );
-	strcat(name_buffer, ds->name);
+	strncat(name_buffer, "/", 1);
+	strncat(name_buffer, ds->name, strlen(ds->name));
 
 	/*name's value*/
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
