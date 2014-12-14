@@ -41,7 +41,7 @@
 #include <curl/curl.h>
 
 #ifndef WRITE_HTTP_DEFAULT_BUFFER_SIZE
-# define WRITE_HTTP_DEFAULT_BUFFER_SIZE 512
+# define WRITE_HTTP_DEFAULT_BUFFER_SIZE 4096
 #endif
 
 #define PLUGIN_NAME "write_blueflood"
