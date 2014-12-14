@@ -135,6 +135,7 @@ static char *json_get_key(const char **path, const char *buff)
 		yajl_tree_free(node);
 		return NULL;
 	}
+	yajl_tree_free(node);
 	return str_val;
 }
 
