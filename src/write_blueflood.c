@@ -108,13 +108,34 @@ struct MemoryStruct {
   size_t size;
 };
 
-const char* json_get_key(const char **path, const char *buff )
+/*************yajl json parsing implementation************/
+static char *json_get_key(const char **path, const char *buff)
 {
-    yajl_val node;
-    char errbuf[1024];
-    node = yajl_tree_parse((const char *) buff, errbuf, sizeof(errbuf));
-    yajl_val v = yajl_tree_get(node, path, yajl_t_string);
-    return YAJL_GET_STRING(v);
+	yajl_val node;
+	char errbuf[1024];
+	char *str_val = NULL;
+	char *str_val_p = NULL;
+
+	node = yajl_tree_parse((const char *) buff, errbuf, sizeof(errbuf));
+	if (node == NULL)
+	{
+		if (strlen(errbuf))
+			ERROR("%s plugin: %s", PLUGIN_NAME, errbuf);
+		else
+			ERROR("%s plugin: unknown json parsing error", PLUGIN_NAME);
+		return NULL;
+	}
+	str_val_p = YAJL_GET_STRING(yajl_tree_get(node, path, yajl_t_string));
+	if (str_val_p && strlen(str_val_p) > 0)
+	{
+		str_val = malloc(strlen(str_val_p + 1));
+		memcpy(str_val, str_val_p, strlen(str_val_p) + 1);
+	} else
+	{
+		yajl_tree_free(node);
+		return NULL;
+	}
+	return str_val;
 }
 
 static size_t
