@@ -100,6 +100,36 @@ int format_name (char *ret, int ret_len,
 
 /*collectD mockuped functions
 ********************************************/
+int plugin_unregister_complex_config (const char *type){
+    INFO ("plugin_unregister_complex_config");
+    s_data.callback_config = NULL;
+    return 0;
+}
+
+int plugin_unregister_init (const char *name){
+    INFO ("plugin_unregister_init");
+    s_data.callback_plugin_init_cb = NULL;
+    return 0;
+}
+
+int plugin_unregister_shutdown (const char *name){
+    INFO ("plugin_unregister_shutdown");
+    s_data.callback_plugin_shutdown_cb = NULL;
+    return 0;
+}
+
+int plugin_unregister_write (const char *name){
+    INFO ("plugin_unregister_write");
+    s_data.plugin_write_cb = NULL;
+    return 0;
+}
+
+int plugin_unregister_flush (const char *name){
+    INFO ("plugin_unregister_flush");
+    s_data.plugin_flush_cb = NULL;
+    return 0;
+}
+
 int plugin_register_complex_config (const char *type,
 				    int (*callback) (oconfig_item_t *)){
     INFO ("plugin_register_complex_config");
