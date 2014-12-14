@@ -87,7 +87,7 @@ typedef struct wb_callback_s
     char *pass;
     char *tenantid;
     char *ttl;
-    char *token;
+    char *auth_url;
 
     yajl_gen yajl_gen;
     pthread_mutex_t send_lock;
@@ -163,7 +163,7 @@ const char* auth(const char* url, const char* user, const char* key) {
               curl_easy_strerror(res));
 
         const char* token_xpath[] = {"access", "token", "id", (const char* )0};
-        token = (char*)json_get_key(token_xpath, outbuffer);
+        token = strdup(json_get_key(token_xpath, outbuffer));
  
         /* always cleanup */ 
         curl_easy_cleanup(curl);
@@ -189,6 +189,12 @@ struct blueflood_curl_transport_t{
     CURL *curl;
     char *url;
     char curl_errbuf[CURL_ERROR_SIZE];
+
+    char *auth_url;
+    char *user;
+    char *pass;
+    char *tenantid;
+    char *token;
 };
 
 /*global variables*/
@@ -227,6 +233,13 @@ static int transport_start_session(struct blueflood_transport_interface *this){
 	headers = curl_slist_append (headers, "Accept:  */*");
 	headers = curl_slist_append (headers, "Content-Type: application/json");
 	headers = curl_slist_append (headers, "Expect:");
+	
+	if (self->token) {
+		char buffer[128];
+		snprintf(buffer, sizeof(buffer), "X-Auth-Token: %s", self->token);
+		headers = curl_slist_append (headers, buffer);
+	}
+
 	CURL_SETOPT_RETURN_ERR(CURLOPT_HTTPHEADER, headers);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_ERRORBUFFER, self->curl_errbuf);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_URL, self->url);
@@ -244,6 +257,21 @@ static int transport_send(struct blueflood_transport_interface *this, const char
 	if (status != CURLE_OK){
 		strncpy(self->curl_errbuf, "libcurl: curl_easy_perform failed.", CURL_ERROR_SIZE );
 	}
+
+	// check if we need to reauth (error code == 401)
+	int code = 200;
+	curl_easy_getinfo(self->curl, CURLINFO_RESPONSE_CODE, &code);
+	if (code == 401) {
+		free(self->token);
+		self->token = strdup((char*)auth(self->auth_url, self->user, self->pass));
+
+		// TODO refactor
+		status = curl_easy_perform (self->curl);
+		if (status != CURLE_OK){
+			strncpy(self->curl_errbuf, "libcurl: curl_easy_perform failed.", CURL_ERROR_SIZE );
+		}		
+	}
+
 	return status;
 }
 
@@ -265,10 +293,16 @@ static struct blueflood_transport_interface s_blueflood_transport_interface = {
     transport_last_error_text
 };
 
-struct blueflood_transport_interface* blueflood_curl_transport_construct(const char *url){
+struct blueflood_transport_interface* blueflood_curl_transport_construct(const char *url,
+	char* auth_url, char* user, char* pass, char* tenantid) {
 	struct blueflood_curl_transport_t *self = calloc(1, sizeof(struct blueflood_curl_transport_t));
 	self->public = s_blueflood_transport_interface;
 	self->url = strdup(url);
+	self->auth_url = auth_url;
+	self->user = user;
+	self->pass = pass;
+	self->tenantid = tenantid;
+	self->token = NULL;
 	if ( self->public.construct(&self->public) == 0 )
 	    return &self->public;
 	else
@@ -449,6 +483,7 @@ static void free_user_data(wb_callback_t *cb){
 	}
 
 	sfree (cb->url);
+	sfree (cb->auth_url);
 	sfree (cb->tenantid);
 	sfree (cb->user);
 	sfree (cb->pass);
@@ -524,6 +559,8 @@ static int wb_config_url (oconfig_item_t *ci){
 		    cf_util_get_string (child, &cb->pass);
 		else if (strcasecmp ("ttlInSeconds", child->key) == 0)
 		    cf_util_get_string (child, &cb->ttl);
+		else if (strcasecmp ("AuthURL", child->key) == 0)
+		    cf_util_get_string (child, &cb->auth_url);
 		else {
 			ERROR ("%s plugin: Invalid configuration "
 			       "option: %s.", PLUGIN_NAME, child->key);
@@ -537,7 +574,8 @@ static int wb_config_url (oconfig_item_t *ci){
 	}
 
 	/*Allocate CURL sending transport*/
-	s_blueflood_transport = blueflood_curl_transport_construct(cb->url);
+	s_blueflood_transport = blueflood_curl_transport_construct(cb->url, 
+		cb->auth_url, cb->user, cb->pass, cb->tenantid);
 	if ( s_blueflood_transport == NULL ){
 		ERROR ("%s plugin: construct transport error", PLUGIN_NAME );
 		free_user_data(cb);
