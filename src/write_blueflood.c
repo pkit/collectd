@@ -38,6 +38,8 @@
 #endif
 
 #include <yajl/yajl_gen.h>
+#include <yajl/yajl_tree.h>
+#include <yajl/yajl_parse.h>
 #include <curl/curl.h>
 
 #ifndef WRITE_HTTP_DEFAULT_BUFFER_SIZE
@@ -106,7 +108,7 @@ struct MemoryStruct {
   size_t size;
 };
 
-char* json_get_key(const char **path, const unsigned char *buff )
+const char* json_get_key(const char **path, const char *buff )
 {
     yajl_val node;
     char errbuf[1024];
@@ -118,7 +120,6 @@ char* json_get_key(const char **path, const unsigned char *buff )
 static size_t
 curl_callback(void *contents, size_t size, size_t nmemb, void *userp)
 {
-    printf("%x %d %d %x\n", contents, size, nmemb, userp);
   size_t realsize = size * nmemb;
   struct MemoryStruct *mem = (struct MemoryStruct *)userp;
  
@@ -136,12 +137,15 @@ const char* auth(const char* url, const char* user, const char* key) {
  
     curl = curl_easy_init();
     if (curl) {
-        curl_easy_setopt(curl, CURLOPT_URL, auth_url);
+    	char inbuffer[1024]; // used for sending auth json, 1024 is pretty enough
+    	// TODO replace with dynamic malloc/realloc in `curl_callback`
+    	char outbuffer[512 * 1024]; // used for storing response, typical values ~15K
+        curl_easy_setopt(curl, CURLOPT_URL, url);
         struct MemoryStruct chunk;
         chunk.memory = outbuffer;
         chunk.size = 0;
         
-        sprintf(inbuffer, template, user, password);
+        sprintf(inbuffer, rax_auth_template, user, key);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, inbuffer);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
@@ -159,7 +163,7 @@ const char* auth(const char* url, const char* user, const char* key) {
               curl_easy_strerror(res));
 
         const char* token_xpath[] = {"access", "token", "id", (const char* )0};
-        char* token = json_get_key(token_xpath, outbuffer);
+        token = (char*)json_get_key(token_xpath, outbuffer);
  
         /* always cleanup */ 
         curl_easy_cleanup(curl);
