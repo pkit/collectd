@@ -41,7 +41,7 @@
 #include <curl/curl.h>
 
 #ifndef WRITE_HTTP_DEFAULT_BUFFER_SIZE
-# define WRITE_HTTP_DEFAULT_BUFFER_SIZE 4096
+# define WRITE_HTTP_DEFAULT_BUFFER_SIZE 512
 #endif
 
 #define PLUGIN_NAME "write_blueflood"
@@ -64,12 +64,14 @@
     }
 
 /*literals for json output*/
-#define STR_NAME "name"
-#define STR_VALUE "value"
+#define STR_NAME "metricName"
+#define STR_VALUE "metricValue"
 #define STR_COUNTER "counter"
 #define STR_TENANTID "tenantId"
-#define STR_TIMESTAMP "timestamp"
+#define STR_TIMESTAMP "collectionTime"
 #define STR_FLUSH_INTERVAL "flushInterval"
+#define STR_TTL "ttlInSeconds"
+
 
 #define STR_COUNTERS "counters"
 #define STR_GAUGES "gauges"
@@ -82,6 +84,7 @@ typedef struct wb_callback_s
     char *user;
     char *pass;
     char *tenantid;
+    char *ttl;
 
     yajl_gen yajl_gen;
     pthread_mutex_t send_lock;
@@ -330,6 +333,13 @@ static int jsongen_output(wb_callback_t *cb,
 							   strlen(STR_FLUSH_INTERVAL)));
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_integer(cb->yajl_gen,
 							    CDTIME_T_TO_MS (vl->interval)));
+		/*key, value pair*/
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
+							   (const unsigned char *)STR_TTL,
+							   strlen(STR_TTL)));
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
+							   (const unsigned char *)cb->ttl,
+							   strlen(cb->ttl)));
 
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_close(cb->yajl_gen));
 		++overall_items_count_added;
@@ -359,6 +369,7 @@ static void free_user_data(wb_callback_t *cb){
 	sfree (cb->tenantid);
 	sfree (cb->user);
 	sfree (cb->pass);
+	sfree (cb->ttl);
 
 	sfree (cb);
 }
@@ -428,13 +439,15 @@ static int wb_config_url (oconfig_item_t *ci){
 		    cf_util_get_string (child, &cb->user);
 		else if (strcasecmp ("Password", child->key) == 0)
 		    cf_util_get_string (child, &cb->pass);
+		else if (strcasecmp ("ttlInSeconds", child->key) == 0)
+		    cf_util_get_string (child, &cb->ttl);
 		else {
 			ERROR ("%s plugin: Invalid configuration "
 			       "option: %s.", PLUGIN_NAME, child->key);
 		}
 	}
 
-	if (!cb->tenantid || !cb->user || !cb->pass || !cb->url){
+	if (!cb->tenantid || !cb->user || !cb->pass || !cb->url || !cb->ttl){
 		ERROR ("%s plugin: Invalid configuration for [%s], "
 		       "absent parameter/s", PLUGIN_NAME, ci->key);
 		return -1;
@@ -514,6 +527,12 @@ static int wb_shutdown (void){
 	INFO ("%s plugin: shutdown", PLUGIN_NAME);
 	blueflood_curl_transport_global_finalize();
 	INFO ("%s plugin: shutdown successful", PLUGIN_NAME);
+	plugin_unregister_complex_config (PLUGIN_NAME);
+	plugin_unregister_init (PLUGIN_NAME);
+	plugin_unregister_flush (PLUGIN_NAME);
+	plugin_unregister_write (PLUGIN_NAME);
+	plugin_unregister_shutdown (PLUGIN_NAME);
+
 	return 0;
 }
 
