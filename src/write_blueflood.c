@@ -183,9 +183,9 @@ static char* auth(const char* url, const char* user, const char* key) {
             ERROR("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
             return NULL;
         }
-        token = json_get_key(token_xpath, chunk->memory);
-        if (chunk->memory != NULL) {
-            free(chunk->memory);
+        token = json_get_key(token_xpath, chunk.memory);
+        if (chunk.memory != NULL) {
+            free(chunk.memory);
         }
         /* always cleanup */ 
         curl_easy_cleanup(curl);
