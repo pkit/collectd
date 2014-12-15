@@ -258,8 +258,9 @@ static int transport_start_session(struct blueflood_transport_interface *this){
 	headers = curl_slist_append (headers, "Expect:");
 	
 	if (self->token) {
-	    auth_header = strncat("X-Auth-Token: ", self->token, strlen(self->token));
-	    headers = curl_slist_append (headers, auth_header);
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "X-Auth-Token: %s", self->token);
+        headers = curl_slist_append (headers, buffer);
 	}
 
 	CURL_SETOPT_RETURN_ERR(CURLOPT_HTTPHEADER, headers);
