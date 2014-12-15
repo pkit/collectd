@@ -167,7 +167,7 @@ static char* auth(const char* url, const char* user, const char* key) {
         chunk.memory = malloc(WRITE_HTTP_DEFAULT_BUFFER_SIZE);
         chunk.size = 0;
         
-        sprintf(inbuffer, rax_auth_template, user, key);
+        snprintf(inbuffer, sizeof(inbuffer), rax_auth_template, user, key);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, inbuffer);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
@@ -183,9 +183,9 @@ static char* auth(const char* url, const char* user, const char* key) {
             ERROR("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
             return NULL;
         }
-        token = json_get_key(token_xpath, chunk->memory);
-        if (chunk->memory != NULL) {
-            free(chunk->memory);
+        token = json_get_key(token_xpath, chunk.memory);
+        if (chunk.memory != NULL) {
+            free(chunk.memory);
         }
         /* always cleanup */ 
         curl_easy_cleanup(curl);
@@ -248,7 +248,10 @@ static void transport_destroy(struct blueflood_transport_interface *this){
 static int transport_start_session(struct blueflood_transport_interface *this){
 	struct curl_slist *headers = NULL;
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
-	char *auth_header = NULL;
+
+	if (!self->token)
+		self->token = auth(self->auth_url, self->user, self->pass);
+
 	/*do not check here for CURL object, as it checked once in constructor*/
 	CURL_SETOPT_RETURN_ERR(CURLOPT_NOSIGNAL, 1L);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_USERAGENT, COLLECTD_USERAGENT"C");
@@ -258,8 +261,9 @@ static int transport_start_session(struct blueflood_transport_interface *this){
 	headers = curl_slist_append (headers, "Expect:");
 	
 	if (self->token) {
-	    auth_header = strncat("X-Auth-Token: ", self->token, strlen(self->token));
-	    headers = curl_slist_append (headers, auth_header);
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "X-Auth-Token: %s", self->token);
+        headers = curl_slist_append (headers, buffer);
 	}
 
 	CURL_SETOPT_RETURN_ERR(CURLOPT_HTTPHEADER, headers);
