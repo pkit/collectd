@@ -459,25 +459,13 @@ static int jsongen_output(wb_callback_t *cb,
 	for (i = 0; i < ds->ds_num; i++){
 		jsongen_map_key_value(cb->yajl_gen, &ds->ds[i], vl, &vl->values[i]);
 
-		/*key, value pair*/
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
-							   (const unsigned char *)STR_TENANTID,
-							   strlen(STR_TENANTID)));
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
-							   (const unsigned char *)cb->tenantid,
-							   strlen(cb->tenantid)));
+
 		/*key, value pair*/
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
 							   (const unsigned char *)STR_TIMESTAMP,
 							   strlen(STR_TIMESTAMP)));
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_integer(cb->yajl_gen,
 							    CDTIME_T_TO_MS (vl->time)));
-		/*key, value pair*/
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
-							   (const unsigned char *)STR_FLUSH_INTERVAL,
-							   strlen(STR_FLUSH_INTERVAL)));
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_integer(cb->yajl_gen,
-							    CDTIME_T_TO_MS (vl->interval)));
 		/*key, value pair*/
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
 							   (const unsigned char *)STR_TTL,
