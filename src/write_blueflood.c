@@ -48,6 +48,7 @@
 
 #define PLUGIN_NAME "write_blueflood"
 #define MAX_METRIC_NAME_SIZE (6*DATA_MAX_NAME_LEN)
+#define MAX_URL_SIZE 128
 
 /*used by transport*/
 #define CURL_SETOPT_RETURN_ERR(option, parameter){			\
@@ -102,6 +103,13 @@ const char* rax_auth_template =
         "\"apiKey\":\"%s\"}"
     "}"
 "}";
+const char* blueflood_ingest_url_template = "%s/v2.0/%s/ingest";
+
+static char* blueflood_get_ingest_url(char* buffer, const char* url, const char* tenant)
+{
+    snprintf(buffer, MAX_URL_SIZE, blueflood_ingest_url_template, url, tenant);
+    return buffer;
+}
 
 struct MemoryStruct {
   char *memory;
@@ -152,14 +160,14 @@ curl_callback(void *contents, size_t size, size_t nmemb, void *userp)
     return realsize;
 }
 
-static char* auth(const char* url, const char* user, const char* key) {
+static int auth(const char* url, const char* user, const char* key, char** token, char** tenant) {
     CURL *curl;
     CURLcode res;
-    char* token = NULL;
     char inbuffer[WRITE_HTTP_DEFAULT_BUFFER_SIZE];
     struct MemoryStruct chunk;
     struct curl_slist *headers = NULL;
     const char* token_xpath[] = {"access", "token", "id", (const char* )0};
+    const char* tenant_xpath[] = {"access", "token", "tenant", "id", (const char* )0};
 
     curl = curl_easy_init();
     if (curl) {
@@ -181,9 +189,11 @@ static char* auth(const char* url, const char* user, const char* key) {
         /* Check for errors */ 
         if (res != CURLE_OK) {
             ERROR("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-            return NULL;
+            return 1;
         }
-        token = json_get_key(token_xpath, chunk.memory);
+        // TODO delicately process errors 
+        *token = json_get_key(token_xpath, chunk.memory);
+        *tenant = json_get_key(tenant_xpath, chunk.memory);
         if (chunk.memory != NULL) {
             free(chunk.memory);
         }
@@ -191,7 +201,7 @@ static char* auth(const char* url, const char* user, const char* key) {
         curl_easy_cleanup(curl);
     }
 
-    return token;
+    return 0;
 } 
 
 
@@ -246,11 +256,14 @@ static void transport_destroy(struct blueflood_transport_interface *this){
 }
 
 static int transport_start_session(struct blueflood_transport_interface *this){
+    char buffer[MAX_URL_SIZE];
 	struct curl_slist *headers = NULL;
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
 
-	if (!self->token)
-		self->token = auth(self->auth_url, self->user, self->pass);
+    if (!self->token) {
+        free(self->tenantid);
+        auth(self->auth_url, self->user, self->pass, &self->token, &self->tenantid);
+    }
 
 	/*do not check here for CURL object, as it checked once in constructor*/
 	CURL_SETOPT_RETURN_ERR(CURLOPT_NOSIGNAL, 1L);
@@ -261,14 +274,13 @@ static int transport_start_session(struct blueflood_transport_interface *this){
 	headers = curl_slist_append (headers, "Expect:");
 	
 	if (self->token) {
-        char buffer[128];
         snprintf(buffer, sizeof(buffer), "X-Auth-Token: %s", self->token);
         headers = curl_slist_append (headers, buffer);
 	}
 
 	CURL_SETOPT_RETURN_ERR(CURLOPT_HTTPHEADER, headers);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_ERRORBUFFER, self->curl_errbuf);
-	CURL_SETOPT_RETURN_ERR(CURLOPT_URL, self->url);
+    CURL_SETOPT_RETURN_ERR(CURLOPT_URL, blueflood_get_ingest_url(buffer, self->url, self->tenantid));
 
 	return 0;
 }
@@ -288,10 +300,13 @@ static int transport_send(struct blueflood_transport_interface *this, const char
 	int code = 200;
 	curl_easy_getinfo(self->curl, CURLINFO_RESPONSE_CODE, &code);
 	if (code == 401) {
-	    if (self->token != NULL) {
-	        free(self->token);
-	    }
-		self->token = auth(self->auth_url, self->user, self->pass);
+        char url_buffer[MAX_URL_SIZE];
+        free(self->token);
+        free(self->tenantid);
+        // this could change tenant so we should modify curl URL
+        // TODO check for errors
+        auth(self->auth_url, self->user, self->pass, &self->token, &self->tenantid);
+        CURL_SETOPT_RETURN_ERR(CURLOPT_URL, blueflood_get_ingest_url(url_buffer, self->url, self->tenantid));
 
 		// TODO refactor
 		status = curl_easy_perform (self->curl);
@@ -329,8 +344,8 @@ struct blueflood_transport_interface* blueflood_curl_transport_construct(const c
 	self->auth_url = auth_url;
 	self->user = user;
 	self->pass = pass;
-	self->tenantid = tenantid;
-	self->token = NULL;
+    self->tenantid = tenantid;
+    self->token = NULL; // TODO free memory
 	if ( self->public.construct(&self->public) == 0 )
 	    return &self->public;
 	else
