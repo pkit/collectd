@@ -248,7 +248,10 @@ static void transport_destroy(struct blueflood_transport_interface *this){
 static int transport_start_session(struct blueflood_transport_interface *this){
 	struct curl_slist *headers = NULL;
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
-	char *auth_header = NULL;
+
+	if (!self->token)
+		self->token = auth(self->auth_url, self->user, self->pass);
+
 	/*do not check here for CURL object, as it checked once in constructor*/
 	CURL_SETOPT_RETURN_ERR(CURLOPT_NOSIGNAL, 1L);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_USERAGENT, COLLECTD_USERAGENT"C");
