@@ -167,7 +167,7 @@ static char* auth(const char* url, const char* user, const char* key) {
         chunk.memory = malloc(WRITE_HTTP_DEFAULT_BUFFER_SIZE);
         chunk.size = 0;
         
-        sprintf(inbuffer, rax_auth_template, user, key);
+        snprintf(inbuffer, sizeof(inbuffer), rax_auth_template, user, key);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, inbuffer);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_callback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
