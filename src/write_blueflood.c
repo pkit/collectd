@@ -308,6 +308,7 @@ static int transport_start_session(struct blueflood_transport_interface *this){
 
     if (!self->token) {
         free(self->tenantid);
+        self->tenantid = 0;
         auth(self->auth_url, self->user, self->pass, &self->token, &self->tenantid);
     }
 
