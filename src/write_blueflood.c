@@ -32,13 +32,13 @@
 #include "common.h"
 #include "utils_cache.h"
 #include "utils_format_json.h"
-#include "yajl_streaming_tree.h"
 
 #if HAVE_PTHREAD_H
 # include <pthread.h>
 #endif
 
 #include <yajl/yajl_gen.h>
+#include <yajl/yajl_tree.h>
 #include <yajl/yajl_parse.h>
 #include <curl/curl.h>
 
@@ -170,15 +170,27 @@ static int metric_format_name(char *ret, int ret_len, const char *hostname,
 
 
 /*************yajl json parsing implementation************/
-static char *json_get_key(yajl_val node, const char **path)
+static char *json_get_key(const char **path, const char *buff)
 {
+	yajl_val node;
+	char errbuf[1024];
 	char *str_val = NULL;
 	char *str_val_p = NULL;
 
-	str_val_p = YAJL_GET_STRING(yajl_streaming_tree_get(node, path, yajl_t_string));
+	node = yajl_tree_parse((const char *) buff, errbuf, sizeof(errbuf));
+	if (node == NULL)
+	{
+		if (strlen(errbuf))
+			ERROR("%s plugin: %s", PLUGIN_NAME, errbuf);
+		else
+			ERROR("%s plugin: unknown json parsing error", PLUGIN_NAME);
+		return NULL;
+	}
+	str_val_p = YAJL_GET_STRING(yajl_tree_get(node, path, yajl_t_string));
 	if (str_val_p && strlen(str_val_p) > 0) {
 	    str_val = strndup(str_val_p, strlen(str_val_p));
 	}
+	yajl_tree_free(node);
 	return str_val;
 }
 
@@ -186,36 +198,40 @@ static size_t
 curl_callback(void *contents, size_t size, size_t nmemb, void *userp)
 {
     size_t realsize = size * nmemb;
-    yajl_handle handle = (yajl_handle)userp;
-    yajl_status status = yajl_parse(handle, (unsigned char *) contents, realsize);
-    if (status != yajl_status_ok) {
+    struct MemoryStruct *mem = (struct MemoryStruct *)userp;
+
+    // hope that realsize > 0 and (mem->size + realsize + 1) < MAX_INT
+    // are checked in libcurl...
+    mem->memory = realloc(mem->memory, mem->size + realsize + 1);
+    if (mem->memory == NULL) {
+        ERROR("%s plugin: not enough memory", PLUGIN_NAME);
         return 0;
     }
+    memcpy(&mem->memory[mem->size], contents, realsize);
+    mem->size += realsize;
+    mem->memory[mem->size] = 0;
     return realsize;
 }
 
 static int auth(const char* url, const char* user, const char* key, char** token, char** tenant) {
-    int result = 0;
     CURL *curl;
     CURLcode res;
     char inbuffer[WRITE_HTTP_DEFAULT_BUFFER_SIZE];
+    struct MemoryStruct chunk;
     struct curl_slist *headers = NULL;
     const char* token_xpath[] = {"access", "token", "id", (const char* )0};
     const char* tenant_xpath[] = {"access", "token", "tenant", "id", (const char* )0};
-    yajl_handle handle;
-    yajl_status status;
-    char errbuf[1024];
-    context_t ctx = { NULL, NULL, errbuf, 1024 };
 
-    handle = yajl_streaming_tree_init(ctx);
     curl = curl_easy_init();
     if (curl) {
         curl_easy_setopt(curl, CURLOPT_URL, url);
+        chunk.memory = malloc(WRITE_HTTP_DEFAULT_BUFFER_SIZE);
+        chunk.size = 0;
         
         snprintf(inbuffer, sizeof(inbuffer), rax_auth_template, user, key);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, inbuffer);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&handle);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&chunk);
 
         headers = curl_slist_append (headers, "Accept:  */*");
         headers = curl_slist_append (headers, "Content-Type: application/json");
@@ -226,31 +242,19 @@ static int auth(const char* url, const char* user, const char* key, char** token
         /* Check for errors */ 
         if (res != CURLE_OK) {
             ERROR("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-            if (strlen(errbuf))
-                ERROR("%s plugin: %s", PLUGIN_NAME, errbuf);
-            result = 1;
-            goto finish_auth;
+            return 1;
         }
-        status = yajl_complete_parse (handle);
-        if (status != yajl_status_ok) {
-            if (strlen(errbuf))
-                ERROR("%s plugin: %s", PLUGIN_NAME, errbuf);
-            else
-                ERROR("%s plugin: unknown json parsing error", PLUGIN_NAME);
-            result = 1;
-            goto finish_auth;
-        }
-        if(ctx.root != NULL) {
-            *token = json_get_key(ctx.root, token_xpath);
-            *tenant = json_get_key(ctx.root, tenant_xpath);
+        // TODO delicately process errors 
+        *token = json_get_key(token_xpath, chunk.memory);
+        *tenant = json_get_key(tenant_xpath, chunk.memory);
+        if (chunk.memory != NULL) {
+            free(chunk.memory);
         }
         /* always cleanup */ 
         curl_easy_cleanup(curl);
     }
-finish_auth:
-    yajl_streaming_tree_free(ctx.root);
-    yajl_free(handle);
-    return result;
+
+    return 0;
 } 
 
 
