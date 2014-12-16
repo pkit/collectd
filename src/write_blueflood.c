@@ -117,6 +117,7 @@ struct MemoryStruct {
 };
 
 
+
 static int metric_format_name(char *ret, int ret_len, const char *hostname,
 		const char *plugin, const char *plugin_instance, const char *type,
 		const char *type_instance, const char *name)
@@ -141,6 +142,7 @@ static int metric_format_name(char *ret, int ret_len, const char *hostname,
 		printf("Error. No buffer space available\n");
 		return ENOBUFS;
 	}
+	s[0] = '\0';
 	STRNCATNULL(s, hostname);
 	if (hostname)
 		STRNCATNULL(s, SEPARATOR);
@@ -165,6 +167,7 @@ static int metric_format_name(char *ret, int ret_len, const char *hostname,
 	STRNCATNULL(s, name);
 	return 0;
 }
+
 
 /*************yajl json parsing implementation************/
 static char *json_get_key(yajl_val node, const char **path)
