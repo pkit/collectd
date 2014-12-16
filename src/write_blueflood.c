@@ -383,7 +383,6 @@ static int jsongen_map_key_value(yajl_gen gen, data_source_t *ds,
 {
 	char name_buffer[MAX_METRIC_NAME_SIZE];
 
-	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_open(gen));
 	/*name's key*/
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
 						   (const unsigned char *)STR_NAME, 
@@ -453,6 +452,10 @@ static int send_json_freemem(yajl_gen *gen){
 		       s_blueflood_transport->last_error_text(s_blueflood_transport));
 	}
 	yajl_gen_free(*gen), *gen = NULL;
+
+    if (jsongen_init(gen) != 0) {
+        return -1;
+    }
 	return 0;
 }
 
@@ -472,8 +475,9 @@ static int jsongen_output(wb_callback_t *cb,
 	}
 	
 	for (i = 0; i < ds->ds_num; i++){
-		jsongen_map_key_value(cb->yajl_gen, &ds->ds[i], vl, &vl->values[i]);
+        YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_open(cb->yajl_gen));
 
+		jsongen_map_key_value(cb->yajl_gen, &ds->ds[i], vl, &vl->values[i]);
 
 		/*key, value pair*/
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
@@ -558,9 +562,25 @@ static int wb_flush (cdtime_t timeout,
 
 	cb = user_data->data;
 	pthread_mutex_lock (&cb->send_lock);
+    // capture output as well or it will be printed to STDOUT (libcurl default)
 	send_json_freemem(&cb->yajl_gen);
 	pthread_mutex_unlock (&cb->send_lock);
 	return ret;
+}
+
+static int wb_read(user_data_t *user_data)
+{
+    wb_callback_t *cb;
+    int ret = 0;
+
+    if (user_data == NULL || user_data->data == NULL)
+        return (-EINVAL);
+
+    cb = user_data->data;
+    pthread_mutex_lock (&cb->send_lock);
+    send_json_freemem(&cb->yajl_gen);
+    pthread_mutex_unlock (&cb->send_lock);
+    return ret;
 }
 
 
@@ -613,13 +633,13 @@ static int wb_config_url (oconfig_item_t *ci){
 		return -1;
 	}
 
-	/*Allocate json generator*/
-	if ( jsongen_init(&cb->yajl_gen) != 0 ){
-		free_user_data(cb);
-		return -1;
-	}
+    /*Allocate json generator*/
+    if ( jsongen_init(&cb->yajl_gen) != 0 ){
+        free_user_data(cb);
+        return -1;
+    }
 
-	DEBUG ("%s plugin: Registering write callback with URL %s",
+    DEBUG ("%s plugin: Registering write callback with URL %s",
 	       PLUGIN_NAME, cb->url);
 
 	user_data.data = cb;
@@ -627,11 +647,12 @@ static int wb_config_url (oconfig_item_t *ci){
 	/*set free_callback only once in according to plugin.c source code*/
 	user_data.free_func = NULL;
 	plugin_register_flush (PLUGIN_NAME, wb_flush, &user_data);
+    plugin_register_complex_read(NULL, PLUGIN_NAME, wb_read, NULL, &user_data);
 
 	user_data.free_func = wb_callback_free;
 	plugin_register_write (PLUGIN_NAME, wb_write, &user_data);
 
-	INFO ("%s plugin: write callback registered", PLUGIN_NAME);
+    INFO ("%s plugin: read/write callback registered", PLUGIN_NAME);
 
 	return (0);
 }
@@ -681,6 +702,7 @@ static int wb_shutdown (void){
 	INFO ("%s plugin: shutdown successful", PLUGIN_NAME);
 	plugin_unregister_complex_config (PLUGIN_NAME);
 	plugin_unregister_init (PLUGIN_NAME);
+    plugin_unregister_read(PLUGIN_NAME);
 	plugin_unregister_flush (PLUGIN_NAME);
 	plugin_unregister_write (PLUGIN_NAME);
 	plugin_unregister_shutdown (PLUGIN_NAME);
