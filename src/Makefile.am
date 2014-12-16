@@ -1145,7 +1145,8 @@ endif
 if BUILD_PLUGIN_WRITE_BLUEFLOOD
 pkglib_LTLIBRARIES += write_blueflood.la
 write_blueflood_la_SOURCES = write_blueflood.c \
-			utils_format_json.c utils_format_json.h
+			utils_format_json.c utils_format_json.h \
+			yajl_streaming_tree.c yajl_streaming_tree.h
 write_blueflood_la_LDFLAGS = $(PLUGIN_LDFLAGS)
 write_blueflood_la_CFLAGS = $(AM_CFLAGS)
 write_blueflood_la_LIBADD =
