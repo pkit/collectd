@@ -116,6 +116,56 @@ struct MemoryStruct {
   size_t size;
 };
 
+
+static int metric_format_name(char *ret, int ret_len, const char *hostname,
+		const char *plugin, const char *plugin_instance, const char *type,
+		const char *type_instance, const char *name)
+{
+#define MAX_PARAMS 6
+#define SEPARATOR "."
+#define INSTANCE_SEPARATOR "-"
+#define STRNCATNULL(buff, str) strncat(buff, STRNULL(str), STRLENNULL(str))
+#define STRLENNULL(str) (str == NULL?0:strlen(str))
+#define STRNULL(str) (str == NULL?"":str)
+	char *s = ret;
+	if (!s)
+	{
+		printf("Error. No buffer space available\n");
+		return ENOBUFS;
+	}
+	size_t all_str_len = STRLENNULL(
+			hostname) + STRLENNULL(plugin) + STRLENNULL(plugin_instance) +
+			STRLENNULL(type) + STRLENNULL(type_instance) + STRLENNULL(name);
+	if (all_str_len + MAX_PARAMS >= ret_len)
+	{
+		printf("Error. No buffer space available\n");
+		return ENOBUFS;
+	}
+	STRNCATNULL(s, hostname);
+	if (hostname)
+		STRNCATNULL(s, SEPARATOR);
+	STRNCATNULL(s, plugin);
+	if ((plugin_instance != NULL) && (plugin_instance[0] != 0))
+	{
+		if (plugin)
+			STRNCATNULL(s, INSTANCE_SEPARATOR);
+		STRNCATNULL(s, plugin_instance);
+	}
+	if (plugin_instance || plugin)
+		STRNCATNULL(s, SEPARATOR);
+	STRNCATNULL(s, type);
+	if ((type_instance != NULL) && (type_instance[0] != 0))
+	{
+		if (type)
+			STRNCATNULL(s, INSTANCE_SEPARATOR);
+		STRNCATNULL(s, type_instance);
+	}
+	if (type_instance || type)
+		STRNCATNULL(s, SEPARATOR);
+	STRNCATNULL(s, name);
+	return 0;
+}
+
 /*************yajl json parsing implementation************/
 static char *json_get_key(yajl_val node, const char **path)
 {
@@ -383,11 +433,9 @@ static int jsongen_map_key_value(yajl_gen gen, data_source_t *ds,
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
 						   (const unsigned char *)STR_NAME, 
 						   strlen(STR_NAME)));
-	format_name(name_buffer, sizeof (name_buffer),
+	metric_format_name(name_buffer, sizeof (name_buffer),
 		    vl->host, vl->plugin, vl->plugin_instance,
-		    vl->type, vl->type_instance);
-	strncat(name_buffer, "/", 1);
-	strncat(name_buffer, ds->name, strlen(ds->name));
+		    vl->type, vl->type_instance, ds->name);
 
 	/*name's value*/
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(gen, 
