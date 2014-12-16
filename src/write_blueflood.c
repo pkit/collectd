@@ -87,7 +87,7 @@ typedef struct wb_callback_s
     char *user;
     char *pass;
     char *tenantid;
-    char *ttl;
+    int  ttl;
     char *auth_url;
 
     yajl_gen yajl_gen;
@@ -308,6 +308,7 @@ static int transport_start_session(struct blueflood_transport_interface *this){
 
     if (!self->token) {
         free(self->tenantid);
+        self->tenantid = 0;
         auth(self->auth_url, self->user, self->pass, &self->token, &self->tenantid);
     }
 
@@ -533,9 +534,8 @@ static int jsongen_output(wb_callback_t *cb,
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
 							   (const unsigned char *)STR_TTL,
 							   strlen(STR_TTL)));
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_string(cb->yajl_gen,
-							   (const unsigned char *)cb->ttl,
-							   strlen(cb->ttl)));
+        YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_integer(cb->yajl_gen,
+                               cb->ttl));
 
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_map_close(cb->yajl_gen));
 		++overall_items_count_added;
@@ -566,7 +566,6 @@ static void free_user_data(wb_callback_t *cb){
 	sfree (cb->tenantid);
 	sfree (cb->user);
 	sfree (cb->pass);
-	sfree (cb->ttl);
 
 	sfree (cb);
 }
@@ -653,7 +652,7 @@ static int wb_config_url (oconfig_item_t *ci){
 		else if (strcasecmp ("Password", child->key) == 0)
 		    cf_util_get_string (child, &cb->pass);
 		else if (strcasecmp ("ttlInSeconds", child->key) == 0)
-		    cf_util_get_string (child, &cb->ttl);
+            cf_util_get_int (child, &cb->ttl);
 		else if (strcasecmp ("AuthURL", child->key) == 0)
 		    cf_util_get_string (child, &cb->auth_url);
 		else {
