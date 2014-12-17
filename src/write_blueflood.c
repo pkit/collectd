@@ -601,36 +601,29 @@ static int wb_write (const data_set_t *ds, const value_list_t *vl,
 	return (status);
 }
 
-static int wb_flush (cdtime_t timeout,
-		     const char *identifier __attribute__((unused)),
-		     user_data_t *user_data){
-	wb_callback_t *cb;
-	int ret=0;
-
-	if (user_data == NULL || user_data->data == NULL)
-	    return (-EINVAL);
-
-	cb = user_data->data;
-	pthread_mutex_lock (&cb->send_lock);
-    // capture output as well or it will be printed to STDOUT (libcurl default)
-	send_json_freemem(&cb->yajl_gen);
-	pthread_mutex_unlock (&cb->send_lock);
-	return ret;
-}
-
-static int wb_read(user_data_t *user_data)
-{
+static int send_data(user_data_t *user_data) {
     wb_callback_t *cb;
-    int ret = 0;
 
     if (user_data == NULL || user_data->data == NULL)
         return (-EINVAL);
 
     cb = user_data->data;
     pthread_mutex_lock (&cb->send_lock);
+    // capture output as well or it will be printed to STDOUT (libcurl default)
     send_json_freemem(&cb->yajl_gen);
     pthread_mutex_unlock (&cb->send_lock);
-    return ret;
+    return 0;
+}
+
+static int wb_flush (cdtime_t timeout __attribute__((unused)),
+		     const char *identifier __attribute__((unused)),
+		     user_data_t *user_data){
+    return send_data(user_data);
+}
+
+static int wb_read(user_data_t *user_data)
+{
+    return send_data(user_data);
 }
 
 
