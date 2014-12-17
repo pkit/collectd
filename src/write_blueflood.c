@@ -222,6 +222,15 @@ static int auth(const char* url, const char* user, const char* key, char** token
     const char* token_xpath[] = {"access", "token", "id", (const char* )0};
     const char* tenant_xpath[] = {"access", "token", "tenant", "id", (const char* )0};
 
+#define CLEANUP_MEM \
+{\
+    if (chunk.memory != NULL) {\
+        free(chunk.memory);\
+    }\
+    /* always cleanup */\
+    curl_easy_cleanup(curl);\
+}
+
     curl = curl_easy_init();
     if (curl) {
         curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -244,14 +253,21 @@ static int auth(const char* url, const char* user, const char* key, char** token
             ERROR("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
             return 1;
         }
-        // TODO delicately process errors 
+        // TODO delicately process errors
         *token = json_get_key(token_xpath, chunk.memory);
-        *tenant = json_get_key(tenant_xpath, chunk.memory);
-        if (chunk.memory != NULL) {
-            free(chunk.memory);
+        if (!*token) {
+        	ERROR("%s plugin: Bad token returned %s", PLUGIN_NAME, *token);
+        	CLEANUP_MEM;
+        	return -1;
         }
-        /* always cleanup */ 
-        curl_easy_cleanup(curl);
+        // TODO check if tenantId is already known
+        *tenant = json_get_key(tenant_xpath, chunk.memory);
+        if (!*tenant) {
+        	ERROR("%s plugin: Bad tenantId returned %s", PLUGIN_NAME, *tenant);
+        	CLEANUP_MEM;
+        	return -1;
+        }
+    	CLEANUP_MEM;
     }
 
     return 0;
@@ -633,11 +649,73 @@ static int wb_read(user_data_t *user_data)
     return ret;
 }
 
+static void config_get_Auth_params (oconfig_item_t *child, wb_callback_t *cb )
+{
+	int i = 0;
+	cf_util_get_string(child, &cb->auth_url);
+	for (i = 0; i < child->children_num; i++)
+	{
+		oconfig_item_t *childAuth = child->children + i;
+		if (strcasecmp("User", childAuth->key) == 0)
+			cf_util_get_string(childAuth, &cb->user);
+		else if (strcasecmp("Password", childAuth->key) == 0)
+			cf_util_get_string(childAuth, &cb->pass);
+		else
+		{
+			ERROR("%s plugin: Invalid configuration "
+					"option: %s.", PLUGIN_NAME, childAuth->key);
+		}
+	}
+	return;
+}
+
+static void config_get_url_params (oconfig_item_t *ci, wb_callback_t *cb)
+{
+	if (strcasecmp("URL", ci->key) == 0)
+	{
+		cf_util_get_string(ci, &cb->url);
+		int i = 0;
+		for (i = 0; i < ci->children_num; i++)
+		{
+			oconfig_item_t *child = ci->children + i;
+			if (strcasecmp("TenantId", child->key) == 0)
+				cf_util_get_string(child, &cb->tenantid);
+			else if (strcasecmp("ttlInSeconds", child->key) == 0)
+				cf_util_get_int(child, &cb->ttl);
+			else if (strcasecmp("AuthURL", child->key) == 0)
+			{
+				config_get_Auth_params ( child, cb);
+			}
+			else
+			{
+				ERROR("%s plugin: Invalid configuration "
+						"option: %s.", PLUGIN_NAME, child->key);
+			}
+		}
+	} else
+	{
+		ERROR("%s plugin: Invalid configuration "
+						"option: %s.", PLUGIN_NAME, ci->key);
+	}
+	return;
+}
 
 static int wb_config_url (oconfig_item_t *ci){
+
+#define CHECK_OPTIONAL_PARAM(str, name, section) \
+    if (!str)\
+    {\
+    	INFO("%s plugin: There is no option  %s in section %s", PLUGIN_NAME, name, section);\
+    }
+#define CHECK_MANDATORY_PARAM(str, name) \
+    if (!str)\
+    {\
+    	ERROR("%s plugin: Invalid configuration. There is no option %s", PLUGIN_NAME, name);\
+    	return -1;\
+    }
+
 	wb_callback_t *cb;
 	user_data_t user_data;
-	int i;
 
 	cb = calloc (1, sizeof (*cb));
 	if (cb == NULL){
@@ -647,32 +725,14 @@ static int wb_config_url (oconfig_item_t *ci){
 
 	pthread_mutex_init (&cb->send_lock, /* attr = */ NULL);
 
-	cf_util_get_string (ci, &cb->url);
+	config_get_url_params (ci, cb);
 
-	for (i = 0; i < ci->children_num; i++) {
-		oconfig_item_t *child = ci->children + i;
-
-		if(strcasecmp("TenantId",child->key) == 0)
-		    cf_util_get_string(child, &cb->tenantid);		
-		else if (strcasecmp ("User", child->key) == 0)
-		    cf_util_get_string (child, &cb->user);
-		else if (strcasecmp ("Password", child->key) == 0)
-		    cf_util_get_string (child, &cb->pass);
-		else if (strcasecmp ("ttlInSeconds", child->key) == 0)
-            cf_util_get_int (child, &cb->ttl);
-		else if (strcasecmp ("AuthURL", child->key) == 0)
-		    cf_util_get_string (child, &cb->auth_url);
-		else {
-			ERROR ("%s plugin: Invalid configuration "
-			       "option: %s.", PLUGIN_NAME, child->key);
-		}
-	}
-
-	if (!cb->tenantid || !cb->user || !cb->pass || !cb->url || !cb->ttl){
-		ERROR ("%s plugin: Invalid configuration for [%s], "
-		       "absent parameter/s", PLUGIN_NAME, ci->key);
-		return -1;
-	}
+	CHECK_OPTIONAL_PARAM(cb->auth_url, "AuthURL", "AuthURL");
+    CHECK_OPTIONAL_PARAM(cb->user, "User", "AuthURL");
+    CHECK_OPTIONAL_PARAM(cb->pass, "Password", "AuthURL");
+    CHECK_OPTIONAL_PARAM(cb->tenantid, "TenantId", "URL");
+    CHECK_MANDATORY_PARAM(cb->url, "URL");
+    CHECK_MANDATORY_PARAM(cb->ttl, "ttlInSeconds");
 
 	/*Allocate CURL sending transport*/
 	s_blueflood_transport = blueflood_curl_transport_construct(cb->url, 
