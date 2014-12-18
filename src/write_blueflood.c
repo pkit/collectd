@@ -222,10 +222,10 @@ static int auth(const char* url, const char* user, const char* key, char** token
     const char* token_xpath[] = {"access", "token", "id", (const char* )0};
     const char* tenant_xpath[] = {"access", "token", "tenant", "id", (const char* )0};
 
-#define CLEANUP_MEM \
+#define CLEANUP_MEM(p) \
 {\
-    if (chunk.memory != NULL) {\
-        free(chunk.memory);\
+    if (p != NULL) {\
+        free(p);\
     }\
     /* always cleanup */\
     curl_easy_cleanup(curl);\
@@ -257,17 +257,25 @@ static int auth(const char* url, const char* user, const char* key, char** token
         *token = json_get_key(token_xpath, chunk.memory);
         if (!*token) {
         	ERROR("%s plugin: Bad token returned %s", PLUGIN_NAME, *token);
-        	CLEANUP_MEM;
+        	CLEANUP_MEM (chunk.memory);
         	return -1;
         }
         // TODO check if tenantId is already known
-        *tenant = json_get_key(tenant_xpath, chunk.memory);
-        if (!*tenant) {
-        	ERROR("%s plugin: Bad tenantId returned %s", PLUGIN_NAME, *tenant);
-        	CLEANUP_MEM;
-        	return -1;
+        char *tenantId = json_get_key(tenant_xpath, chunk.memory);
+        if (!tenantId ) {
+        	if (!*tenant)
+        	{
+        		ERROR("%s plugin: Bad tenantId %s", PLUGIN_NAME, *tenant);
+        		CLEANUP_MEM (chunk.memory);
+            	return -1;
+        	}
         }
-    	CLEANUP_MEM;
+        else
+        {
+    		CLEANUP_MEM (*tenant);
+        	*tenant = tenantId;
+        }
+    	CLEANUP_MEM(chunk.memory);
     }
 
     return 0;
