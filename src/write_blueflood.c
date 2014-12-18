@@ -275,6 +275,7 @@ static int auth(const char* url, const char* user, const char* key, char** token
         sfree(chunk.memory);
     }
     /* always cleanup */
+    curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
     return 0;
