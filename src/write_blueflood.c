@@ -600,6 +600,7 @@ static void free_user_data(wb_callback_t *cb){
 
 	if ( cb->yajl_gen != NULL ){
 	    send_json_freemem(&cb->yajl_gen);
+        yajl_gen_free(cb->yajl_gen);
 	}
 
 	/*curl transport end session & destroy*/
