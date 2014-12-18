@@ -226,9 +226,8 @@ static int auth(const char* url, const char* user, const char* key, char** token
 {\
     if (p != NULL) {\
         free(p);\
+        p = NULL;\
     }\
-    /* always cleanup */\
-    curl_easy_cleanup(curl);\
 }
 
     curl = curl_easy_init();
@@ -258,6 +257,8 @@ static int auth(const char* url, const char* user, const char* key, char** token
         if (!*token) {
         	ERROR("%s plugin: Bad token returned %s", PLUGIN_NAME, *token);
         	CLEANUP_MEM (chunk.memory);
+            /* always cleanup */\
+            curl_easy_cleanup(curl);
         	return -1;
         }
         // TODO check if tenantId is already known
@@ -267,6 +268,8 @@ static int auth(const char* url, const char* user, const char* key, char** token
         	{
         		ERROR("%s plugin: Bad tenantId %s", PLUGIN_NAME, *tenant);
         		CLEANUP_MEM (chunk.memory);
+        	    /* always cleanup */
+        	    curl_easy_cleanup(curl);
             	return -1;
         	}
         }
@@ -277,6 +280,8 @@ static int auth(const char* url, const char* user, const char* key, char** token
         }
     	CLEANUP_MEM(chunk.memory);
     }
+    /* always cleanup */
+    curl_easy_cleanup(curl);
 
     return 0;
 } 
@@ -286,7 +291,7 @@ static int auth(const char* url, const char* user, const char* key, char** token
 struct blueflood_transport_interface {
     int  (*construct)(struct blueflood_transport_interface *this);
     void (*destroy)(struct blueflood_transport_interface *this);
-    int  (*start_session)(struct blueflood_transport_interface *this);
+//    int  (*start_session)(struct blueflood_transport_interface *this);
     void (*end_session)(struct blueflood_transport_interface *this);
     int  (*send)(struct blueflood_transport_interface *this, const char *buffer, size_t len);
     const char *(*last_error_text)(struct blueflood_transport_interface *this);
@@ -332,38 +337,45 @@ static void transport_destroy(struct blueflood_transport_interface *this){
 	free(self);
 }
 
-static int transport_start_session(struct blueflood_transport_interface *this){
-    char buffer[MAX_URL_SIZE];
+static int transport_send(struct blueflood_transport_interface *this, const char *buffer, size_t len){
+
+	/***********************************************************************************************************
+	start session
+	***********************************************************************************************************/
+
+	char url_buffer[MAX_URL_SIZE];
 	struct curl_slist *headers = NULL;
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
+    CURLcode status = 0;
 
+	//for get token first time
     if (!self->token) {
         auth(self->auth_url, self->user, self->pass, &self->token, &self->tenantid);
     }
 
+
 	/*do not check here for CURL object, as it checked once in constructor*/
 	CURL_SETOPT_RETURN_ERR(CURLOPT_NOSIGNAL, 1L);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_USERAGENT, COLLECTD_USERAGENT"C");
-	
-	headers = curl_slist_append (headers, "Accept:  */*");
-	headers = curl_slist_append (headers, "Content-Type: application/json");
-	headers = curl_slist_append (headers, "Expect:");
-	
-	if (self->token) {
-        snprintf(buffer, sizeof(buffer), "X-Auth-Token: %s", self->token);
-        headers = curl_slist_append (headers, buffer);
+
+	headers = curl_slist_append(headers, "Accept:  */*");
+	headers = curl_slist_append(headers, "Content-Type: application/json");
+	headers = curl_slist_append(headers, "Expect:");
+
+	if (self->token)
+	{
+		snprintf(url_buffer, sizeof(url_buffer), "X-Auth-Token: %s",
+				self->token);
+		headers = curl_slist_append(headers, url_buffer);
 	}
 
 	CURL_SETOPT_RETURN_ERR(CURLOPT_HTTPHEADER, headers);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_ERRORBUFFER, self->curl_errbuf);
-    CURL_SETOPT_RETURN_ERR(CURLOPT_URL, blueflood_get_ingest_url(buffer, self->url, self->tenantid));
+	CURL_SETOPT_RETURN_ERR(CURLOPT_URL, blueflood_get_ingest_url(url_buffer, self->url, self->tenantid));
 
-	return 0;
-}
-
-static int transport_send(struct blueflood_transport_interface *this, const char *buffer, size_t len){
-	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
-	CURLcode status = 0;
+	/***********************************************************************************************************
+	send
+	***********************************************************************************************************/
 
 	CURL_SETOPT_RETURN_ERR(CURLOPT_POSTFIELDSIZE, len);
 	CURL_SETOPT_RETURN_ERR(CURLOPT_POSTFIELDS, buffer);
@@ -405,7 +417,7 @@ static const char *transport_last_error_text(struct blueflood_transport_interfac
 static struct blueflood_transport_interface s_blueflood_transport_interface = {
     transport_construct,
     transport_destroy,
-    transport_start_session,
+//    transport_start_session,
     transport_end_session,
     transport_send,
     transport_last_error_text
@@ -510,11 +522,13 @@ static int send_json_freemem(yajl_gen *gen){
 		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_array_close(*gen));
 	}
 
+/*
 	if ( (s_blueflood_transport->start_session(s_blueflood_transport)) != 0 ){
 		ERROR ("%s plugin: %s", PLUGIN_NAME, 
 		       s_blueflood_transport->last_error_text(s_blueflood_transport));
 		return -1;
 	}
+*/
 
 	/*cache flush & free memory */
 	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(*gen, &buf, &len));
