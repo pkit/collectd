@@ -338,8 +338,6 @@ static int transport_start_session(struct blueflood_transport_interface *this){
 	struct blueflood_curl_transport_t *self = (struct blueflood_curl_transport_t *)this;
 
     if (!self->token) {
-        free(self->tenantid);
-        self->tenantid = 0;
         auth(self->auth_url, self->user, self->pass, &self->token, &self->tenantid);
     }
 
@@ -380,7 +378,6 @@ static int transport_send(struct blueflood_transport_interface *this, const char
 	if (code == 401) {
         char url_buffer[MAX_URL_SIZE];
         free(self->token);
-        free(self->tenantid);
         // this could change tenant so we should modify curl URL
         // TODO check for errors
         auth(self->auth_url, self->user, self->pass, &self->token, &self->tenantid);
