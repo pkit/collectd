@@ -5107,6 +5107,7 @@ plugin_contextswitch="no"
 plugin_cpu="no"
 plugin_cpufreq="no"
 plugin_curl_json="no"
+plugin_blueflood="no"
 plugin_curl_xml="no"
 plugin_df="no"
 plugin_disk="no"
@@ -5287,6 +5288,7 @@ fi
 if test "x$with_libcurl" = "xyes" && test "x$with_libyajl" = "xyes"
 then
 	plugin_curl_json="yes"
+	plugin_blueflood="yes"
 fi
 
 if test "x$with_libcurl" = "xyes" && test "x$with_libxml2" = "xyes"
@@ -5577,6 +5579,7 @@ AC_PLUGIN([vserver],     [$plugin_vserver],    [Linux VServer statistics])
 AC_PLUGIN([wireless],    [$plugin_wireless],   [Wireless statistics])
 AC_PLUGIN([write_graphite], [yes],             [Graphite / Carbon output plugin])
 AC_PLUGIN([write_http],  [$with_libcurl],      [HTTP output plugin])
+AC_PLUGIN([write_blueflood],  [$plugin_blueflood],      [Blueflood output plugin])
 AC_PLUGIN([write_kafka],  [$with_librdkafka],  [Kafka output plugin])
 AC_PLUGIN([write_mongodb], [$with_libmongoc],  [MongoDB output plugin])
 AC_PLUGIN([write_redis], [$with_libhiredis],    [Redis output plugin])
@@ -5732,6 +5735,16 @@ AC_SUBST(LCC_VERSION_MINOR)
 AC_SUBST(LCC_VERSION_PATCH)
 AC_SUBST(LCC_VERSION_EXTRA)
 AC_SUBST(LCC_VERSION_STRING)
+
+COVERAGE_CFLAGS="-Wdisabled-optimization -O0 --coverage -fprofile-arcs -ftest-coverage"
+COVERAGE_CXXFLAGS="-Wdisabled-ootimization -O0 --coverage -fprofile-arcs -ftest-coverage"
+COVERAGE_LDFLAGS="-fprofile-arcs -lgcov"
+
+m4_include([m4/gcov.m4])
+AC_TDD_GCOV
+AC_SUBST(COVERAGE_CFLAGS)
+AC_SUBST(COVERAGE_CXXFLAGS)
+AC_SUBST(COVERAGE_LDFLAGS)
 
 AC_CONFIG_FILES(src/libcollectdclient/collectd/lcc_features.h)
 
@@ -5946,6 +5959,7 @@ Configuration:
     wireless  . . . . . . $enable_wireless
     write_graphite  . . . $enable_write_graphite
     write_http  . . . . . $enable_write_http
+    write_blueflood . . . $enable_write_blueflood
     write_kafka . . . . . $enable_write_kafka
     write_mongodb . . . . $enable_write_mongodb
     write_redis . . . . . $enable_write_redis
