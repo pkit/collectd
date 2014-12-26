@@ -1164,6 +1164,19 @@ write_http_la_LIBADD += $(BUILD_WITH_LIBCURL_LIBS)
 endif
 endif
 
+if BUILD_PLUGIN_WRITE_BLUEFLOOD
+pkglib_LTLIBRARIES += write_blueflood.la
+write_blueflood_la_SOURCES = write_blueflood.c \
+			utils_format_json.c utils_format_json.h
+write_blueflood_la_LDFLAGS = $(PLUGIN_LDFLAGS)
+write_blueflood_la_CFLAGS = $(AM_CFLAGS)
+write_blueflood_la_LIBADD =
+if BUILD_WITH_LIBCURL
+write_blueflood_la_CFLAGS += $(BUILD_WITH_LIBCURL_CFLAGS) 
+write_blueflood_la_LIBADD += $(BUILD_WITH_LIBCURL_LIBS) $(BUILD_WITH_LIBYAJL_LIBS)
+endif
+endif
+
 if BUILD_PLUGIN_WRITE_KAFKA
 pkglib_LTLIBRARIES += write_kafka.la
 write_kafka_la_SOURCES = write_kafka.c \
@@ -1375,3 +1388,19 @@ test_utils_vl_lookup_LDFLAGS = -export-dynamic
 test_utils_vl_lookup_LDADD =
 
 TESTS = test_common test_utils_avltree test_utils_heap test_utils_mount test_utils_vl_lookup
+
+if BUILD_PLUGIN_WRITE_BLUEFLOOD
+check_PROGRAMS += test_blueflood1 test_blueflood2
+test_blueflood1_SOURCES = tests/test_blueflood1.c tests/mock/plugin.c tests/test_blueflood_mock.c \
+daemon/common.c tests/mock/utils_time.c tests/mock/utils_cache.c
+test_blueflood1_CPPFLAGS = $(AM_CPPFLAGS) $(LTDLINCL) $(COVERAGE_CFLAGS)
+test_blueflood1_LDFLAGS = -lpthread $(COVERAGE_LDFLAGS)
+test_blueflood1_LDADD = 
+
+test_blueflood2_SOURCES = tests/test_blueflood2.c tests/mock/plugin.c tests/test_blueflood_mock.c \
+daemon/common.c tests/mock/utils_time.c tests/mock/utils_cache.c
+test_blueflood2_CPPFLAGS = $(AM_CPPFLAGS) $(LTDLINCL) $(COVERAGE_CFLAGS)
+test_blueflood2_LDFLAGS = -lpthread $(COVERAGE_LDFLAGS)
+test_blueflood2_LDADD = 
+TESTS += test_blueflood1 test_blueflood2
+endif
