@@ -109,6 +109,11 @@
 
 #define BLUEFLOOD_API_VERSION "v2.0"
 
+#define HTTP_UNAUTHORIZED 401
+#define HTTP_FORBIDDEN 403
+#define HTTP_OK 200
+#define HTTP_SERVER_ERROR 500
+
 /* Declarations section */
 /* TODO: Move here all types, function declarations */
 struct wb_transport_s;
@@ -138,9 +143,9 @@ struct blueflood_transport_interface
 typedef struct data_s
 {
 	char *url;
-	char *tenantid;
+	char *ingest_url;
 } data_t;
-void free_data(data_t *data);
+static void free_data(data_t *data);
 
 typedef struct auth_data_s
 {
@@ -148,8 +153,9 @@ typedef struct auth_data_s
 	char *user;
 	char *pass;
 	char *token;
+	char *tenantid;
 } auth_data_t;
-void free_auth_data(auth_data_t *auth_data);
+static void free_auth_data(auth_data_t *auth_data);
 
 struct blueflood_curl_transport_t
 {
@@ -188,17 +194,18 @@ struct MemoryStruct
 
 /* Implementation section */
 
-void free_data(data_t *data)
+static void free_data(data_t *data)
 {
 	sfree(data->url);
-	sfree(data->tenantid);
+	sfree(data->ingest_url);
 }
-void free_auth_data(auth_data_t *auth_data)
+static void free_auth_data(auth_data_t *auth_data)
 {
 	sfree(auth_data->auth_url);
 	sfree(auth_data->user);
 	sfree(auth_data->pass);
 	sfree(auth_data->token);
+	sfree(auth_data->tenantid);
 }
 
 static int metric_format_name(char *ret, int ret_len, const char *hostname,
@@ -270,7 +277,7 @@ static size_t curl_callback(const void *contents, size_t size, size_t nmemb,
 }
 
 /* save auth header in a static variable and return */
-const char *get_auth_request(const char *user, const char *pass)
+static const char *get_auth_request(const char *user, const char *pass)
 {
 	static char inbuffer[WRITE_HTTP_DEFAULT_BUFFER_SIZE];
 	const char* rax_auth_template =
@@ -285,12 +292,12 @@ const char *get_auth_request(const char *user, const char *pass)
 	return inbuffer;
 }
 
-int blueflood_request_setup(CURL *curl, struct curl_slist **headers,
-        char *curl_errbuf, const char *url, const char *token,
-        const char *buffer, size_t len)
+static int blueflood_request_setup(struct blueflood_curl_transport_t *transport,
+		struct curl_slist **headers, const char *token,
+        const char *post_data, size_t post_data_len)
 {
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_NOSIGNAL, 1L);
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_USERAGENT, COLLECTD_USERAGENT"C");
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_NOSIGNAL, 1L);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_USERAGENT, COLLECTD_USERAGENT"C");
 
 	*headers = curl_slist_append(*headers, "Accept:  */*");
 	*headers = curl_slist_append(*headers, "Content-Type: application/json");
@@ -303,40 +310,38 @@ int blueflood_request_setup(CURL *curl, struct curl_slist **headers,
 		*headers = curl_slist_append(*headers, token_header);
 	}
 
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_HTTPHEADER, *headers);
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_ERRORBUFFER, curl_errbuf);
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_URL, url);
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_POSTFIELDSIZE, len);
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_POSTFIELDS, buffer);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_HTTPHEADER, *headers);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_ERRORBUFFER, transport->curl_errbuf);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_URL, transport->data.ingest_url);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_POSTFIELDSIZE, post_data_len);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_POSTFIELDS, post_data);
 	return 0;
 }
 
-int auth_request_setup(CURL *curl, struct curl_slist **headers,
-        char *curl_errbuf, const char *url, const char *user, const char *pass,
-        struct MemoryStruct *chunk)
+static int auth_request_setup(struct blueflood_curl_transport_t *transport,
+		auth_data_t *auth_data,
+		struct curl_slist **headers, struct MemoryStruct *chunk)
 {
 	/* TODO: should expect if headers are required or not */
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_NOSIGNAL, 1L);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_NOSIGNAL, 1L);
 	/* TODO: user agent name for auth server and blueflood may be different */
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_USERAGENT, COLLECTD_USERAGENT"C");
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_ERRORBUFFER, curl_errbuf);
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_URL, url);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_USERAGENT, COLLECTD_USERAGENT"C");
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_ERRORBUFFER, transport->curl_errbuf);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_URL, auth_data->auth_url);
 
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_POSTFIELDS,
-	        get_auth_request(user, pass));
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_WRITEFUNCTION, curl_callback);
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_WRITEDATA, chunk);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_POSTFIELDS,
+	        get_auth_request(auth_data->user, auth_data->pass));
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_WRITEFUNCTION, curl_callback);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_WRITEDATA, chunk);
 
 	*headers = curl_slist_append(*headers, "Accept:  */*");
 	*headers = curl_slist_append(*headers, "Content-Type: application/json");
 	*headers = curl_slist_append(*headers, "Expect:");
-	CURL_SETOPT_RETURN_ERR(curl, CURLOPT_HTTPHEADER, *headers);
+	CURL_SETOPT_RETURN_ERR(transport->curl, CURLOPT_HTTPHEADER, *headers);
 	return 0;
 }
 
-/* TODO: simplify credentials handling, no need to pass them around everywhere */
-static int auth(struct blueflood_curl_transport_t *transport, const char* url,
-        const char* user, const char* pass, char** token, char** tenant)
+static int auth(struct blueflood_curl_transport_t *transport, auth_data_t *auth_data)
 {
 	CURLcode res;
 	struct MemoryStruct chunk;
@@ -351,8 +356,7 @@ static int auth(struct blueflood_curl_transport_t *transport, const char* url,
 	chunk.memory = malloc(WRITE_HTTP_DEFAULT_BUFFER_SIZE);
 	chunk.size = 0;
 
-	if (!(res = auth_request_setup(transport->curl, &headers,
-	        transport->curl_errbuf, url, user, pass, &chunk)))
+	if (!(res = auth_request_setup(transport, auth_data, &headers, &chunk)))
 	{
 		res = transport->public.send(&transport->public, &code);
 		if (res != CURLE_OK)
@@ -362,17 +366,17 @@ static int auth(struct blueflood_curl_transport_t *transport, const char* url,
 		}
 		else
 		{
-			sfree(*token);
-			*token = json_get_key_alloc(token_xpath, chunk.memory);
-			sfree(*tenant);
-			*tenant = json_get_key_alloc(tenant_xpath, chunk.memory);
+			sfree(auth_data->token);
+			auth_data->token = json_get_key_alloc(token_xpath, chunk.memory);
+			sfree(auth_data->tenantid);
+			auth_data->tenantid = json_get_key_alloc(tenant_xpath, chunk.memory);
 		
-			if (!*token)
+			if (!auth_data->token)
 			{
 				ERROR("%s plugin: Bad token returned", PLUGIN_NAME);
 				res = -1;
 			}
-			if (!*tenant)
+			if (!auth_data->tenantid)
 			{
 				ERROR("%s plugin: Bad tenantdId returned", PLUGIN_NAME);
 				res = -1;
@@ -446,7 +450,7 @@ const char *transport_last_error_text(
 ///////////////////////
 /*
  * @param data, auth_data ownership is transfered into instance */
-struct blueflood_transport_interface* blueflood_curl_transport_alloc(
+static struct blueflood_transport_interface* blueflood_curl_transport_alloc(
         data_t* data, auth_data_t* auth_data)
 {
 	struct blueflood_curl_transport_t *self = calloc(1,
@@ -466,7 +470,7 @@ struct blueflood_transport_interface* blueflood_curl_transport_alloc(
 	}
 }
 
-void blueflood_curl_transport_free(
+static void blueflood_curl_transport_free(
         struct blueflood_transport_interface **transport)
 {
 	if (*transport != NULL)
@@ -492,6 +496,12 @@ static void blueflood_curl_transport_global_finalize()
 
 static int jsongen_init(yajl_gen *gen)
 {
+	/* free previous generator, if exists */
+	if (*gen != NULL)
+	{
+		yajl_gen_free(*gen);
+		*gen = NULL;
+	}
 	/* initialize yajl */
 	*gen = yajl_gen_alloc(NULL);
 	if (*gen != NULL)
@@ -556,142 +566,112 @@ static int jsongen_map_key_value(yajl_gen gen, data_source_t *ds,
 	return 0;
 }
 
-static int send_json_freemem(yajl_gen *gen, int *successfull_send)
+static int send_json(yajl_gen *gen)
 {
-	const unsigned char *buf;
-	size_t len;
+	const unsigned char *post_data_buf;
+	size_t post_data_len;
 	int request_err = 0;
-	/* finalize json structure if last send was success */
-	if (*successfull_send == 0)
-	{
-		/* cache flush & free memory */
-		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(*gen, &buf, &len));
-
-		/* don't add anything to buffer if we don't have any data.*/
-		if (len > 0)
-		{
-			/*end of json*/
-			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_array_close(*gen));
-		}
-	}
+	int success = -1;
+	int max_attempts_count = 2;
+	long code = HTTP_SERVER_ERROR;
+	struct curl_slist *headers = NULL;
+	struct blueflood_curl_transport_t *transport =
+			(struct blueflood_curl_transport_t *) s_blueflood_transport;
 
 	/*cache flush & free memory */
-	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(*gen, &buf, &len));
+	YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(*gen, &post_data_buf, &post_data_len));
 
-	/* if we have any data for sending */
-	if (len > 0)
+	/* if we don't have any data, return success */
+	if (post_data_len == 0)
 	{
-		struct curl_slist *headers = NULL;
-		static char url_buffer[MAX_URL_SIZE];
-		struct blueflood_curl_transport_t *transport =
-		        (struct blueflood_curl_transport_t *) s_blueflood_transport;
-		int max_attempts_count = 2;
-		int success = -1;
-		while (request_err == 0 && max_attempts_count-- > 0 && success != 0)
+		return 0;
+	}
+	while (request_err == 0 && max_attempts_count-- > 0 && success != 0)
+	{
+		/* if running auth for the first time, get auth token */
+		if (transport->auth_data.auth_url != NULL
+				&& (transport->auth_data.token == NULL
+						|| transport->auth_data.tenantid == NULL))
 		{
-			/* TODO: do we need a default value here ? */
-			long code = 500;
-			/* if running auth for the first time, get auth token */
-			if (transport->auth_data.auth_url != NULL
-			        && transport->auth_data.token == NULL)
+			request_err = auth(transport, &transport->auth_data);
+			if (request_err)
 			{
-				request_err = auth(transport, transport->auth_data.auth_url,
-				        transport->auth_data.user, transport->auth_data.pass,
-				        &transport->auth_data.token, &transport->data.tenantid);
-				if (request_err)
-				{
-					/* TODO: gracefully return from `while` loop
-					 * otherwise it will cause segfault */
-					ERROR("%s plugin: Authentication failed", PLUGIN_NAME);
-					/* continue and handle request_error */
-					continue;
-				}
-			}
-
-			/* generate valid url for ingestion */
-			blueflood_get_ingest_url(url_buffer, transport->data.url,
-			        transport->data.tenantid);
-			/* TODO: check return error */
-			request_err = blueflood_request_setup(transport->curl, &headers,
-			        transport->curl_errbuf, url_buffer,
-			        transport->auth_data.token, (const char *) buf, len);
-			if (request_err != 0)
-			{
-				/* continue and handle request_error */
-				curl_slist_free_all(headers), headers = NULL;
-				continue;
-			}
-
-			/* for current implementation in case of error
-			 * yajl_buf will be destroyed and plugin_read
-			 * will return error and it is expected that
-			 * the data we did not send will be submitted again
-			 * by collectd to the write callback.
-			 * needs to be proven true! */
-			request_err = s_blueflood_transport->send(s_blueflood_transport,
-			        &code);
-			curl_slist_free_all(headers), headers = NULL;
-			if (request_err != 0)
-			{
-				ERROR("%s plugin: Metrics (len=%zu) send error: %s",
-				        PLUGIN_NAME, len,
-				        s_blueflood_transport->last_error_text(
-				                s_blueflood_transport));
+				/* TODO: gracefully return from `while` loop
+				 * otherwise it will cause segfault */
+				ERROR("%s plugin: Authentication failed", PLUGIN_NAME);
 				/* continue and handle request_error */
 				continue;
 			}
-			else
-			{
-				success = 0;
-			}
-
-			/* if auth_url is configured then check and handle auth errors */
-			if (!request_err && transport->auth_data.auth_url != NULL)
-			{
-				/* check if we need to reauth  */
-				if (code != 401 && code != 403)
-				{
-					success = 0; /* OK */
-				}
-				else
-				{
-					/* NULL token will cause auth attempt */
-					sfree(transport->auth_data.token);
-					success = -1;
-				}
-				/* TODO: check for errors */
-			}
 		}
 
-		if (success != 0&&max_attempts_count<=0)
+		if (transport->data.ingest_url == NULL)
 		{
-			/* TODO: handle auth error */
-			ERROR("%s plugin: Blueflood server respnsed with auth error",
-			      PLUGIN_NAME );
-		}
-
-		/* send is ok, free yajl resources */
-		if (!request_err)
-		{
-			*successfull_send = 0;
-			yajl_gen_free(*gen), *gen = NULL;
-
-			if (jsongen_init(gen) != 0)
+			if (transport->auth_data.tenantid == NULL)
 			{
+				ERROR("%s plugin: Failed to get tenant id from auth server",
+						PLUGIN_NAME);
 				return -1;
 			}
+			blueflood_get_ingest_url(transport->data.ingest_url, transport->data.url,
+					transport->auth_data.tenantid);
+		}
+
+		/* TODO: check return error */
+		request_err = blueflood_request_setup(transport, &headers,
+				transport->auth_data.token,
+				(const char *) post_data_buf, post_data_len);
+		if (request_err != 0)
+		{
+			/* continue and handle request_error */
+			curl_slist_free_all(headers), headers = NULL;
+			continue;
+		}
+
+		/* for current implementation in case of error
+		 * yajl_buf will be destroyed and plugin_read
+		 * will return error and it is expected that
+		 * the data we did not send will be submitted again
+		 * by collectd to the write callback.
+		 * needs to be proven true! */
+		request_err = transport->public.send(&transport->public, &code);
+		curl_slist_free_all(headers), headers = NULL;
+		if (request_err != 0)
+		{
+			ERROR("%s plugin: Metrics (len=%zu) send error: %s",
+					PLUGIN_NAME, post_data_len,
+					transport->public.last_error_text(&transport->public));
+			/* continue and handle request_error */
+			continue;
 		}
 		else
 		{
-			/*if send was not a success then just try to
-			 resend it next time, do not free yajl
-			 resources.  All further invocations of write
-			 callback must return error at the attempt to add
-			 new data while old data is not yet sent.*/
-			*successfull_send = -1;
+			success = 0;
+		}
+
+		/* if auth_url is configured then check and handle auth errors */
+		if (request_err != 0 && transport->auth_data.auth_url != NULL)
+		{
+			/* check if we need to reauth  */
+			if (code == HTTP_UNAUTHORIZED || code == HTTP_FORBIDDEN)
+			{
+				/* NULL token will cause auth attempt */
+				sfree(transport->auth_data.token);
+				success = -1;
+			}
+			else if (code == HTTP_OK)
+			{
+				success = 0;
+			}
 		}
 	}
-	return request_err;
+
+	if (success != 0 && max_attempts_count <= 0)
+	{
+		/* TODO: handle auth error */
+		ERROR("%s plugin: Blueflood server responded with auth error",
+			  PLUGIN_NAME );
+	}
+	return success;
 }
 
 static int jsongen_output(wb_callback_t *cb, const data_set_t *ds,
@@ -744,7 +724,7 @@ static void free_user_data(wb_callback_t *cb)
 
 	if (cb->yajl_gen != NULL)
 	{
-		send_json_freemem(&cb->yajl_gen, &cb->successfull_send);
+		send_json(&cb->yajl_gen);
 		/* error handling is not needed on exit, free yajl
 		 memory anyway */
 		yajl_gen_free(cb->yajl_gen);
@@ -765,7 +745,9 @@ static int wb_write(const data_set_t *ds, const value_list_t *vl,
         user_data_t *user_data)
 {
 	wb_callback_t *cb;
-	int status;
+	/* All attempts to write must be ignored
+	 * if previously written data is not sent */
+	int status = -1;
 
 	cb = user_data->data;
 	pthread_mutex_lock(&cb->send_lock);
@@ -774,20 +756,12 @@ static int wb_write(const data_set_t *ds, const value_list_t *vl,
 		status = jsongen_output(cb, ds, vl);
 		if (status != 0)
 		{
-			ERROR("%s plugin: json generating failed err=%d.", PLUGIN_NAME,
+			ERROR("%s plugin: json generation failed err=%d.", PLUGIN_NAME,
 			        status);
-			/*reset all generated data and thus do not
-			  sent it due to error in data and in json
-			  structure*/
-			yajl_gen_free(cb->yajl_gen), cb->yajl_gen = NULL;
-			status = 0;
+			/* reset all data and try to continue
+			 * probably encoding problem */
+			status = jsongen_init(&cb->yajl_gen);
 		}
-	}
-	else
-	{
-		/* All attempts to write must be ignored while
-		 previously written data is not sent */
-		status = -1;
 	}
 	pthread_mutex_unlock(&cb->send_lock);
 	return (status);
@@ -798,10 +772,39 @@ static int send_data(user_data_t *user_data)
 {
 	wb_callback_t *cb;
 	int err = 0;
+	const unsigned char *buf;
+	size_t len;
 
 	cb = user_data->data;
 	pthread_mutex_lock(&cb->send_lock);
-	err = send_json_freemem(&cb->yajl_gen, &cb->successfull_send);
+	/* finalize json structure if last send was a success */
+	if (cb->successfull_send == 0) /* OK */
+	{
+		/* cache flush & free memory */
+		YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_get_buf(cb->yajl_gen, &buf, &len));
+
+		/* don't add anything to buffer if we don't have any data.*/
+		if (len > 0)
+		{
+			/*end of json*/
+			YAJL_CHECK_RETURN_ON_ERROR(yajl_gen_array_close(cb->yajl_gen));
+		}
+	}
+	err = send_json(&cb->yajl_gen);
+	if (err == 0) /* OK */
+	{
+		cb->successfull_send = 0;
+		err = jsongen_init(&cb->yajl_gen);
+	}
+	else
+	{
+		/*if send was not a success then just try to
+		 resend it next time, do not free yajl
+		 resources.  All further invocations of write
+		 callback must return error at the attempt to add
+		 new data while old data is not yet sent.*/
+		cb->successfull_send = -1;
+	}
 	pthread_mutex_unlock(&cb->send_lock);
 	return err;
 }
@@ -841,7 +844,7 @@ static void config_get_auth_params(oconfig_item_t *child, wb_callback_t *cb,
 }
 
 static void config_get_url_params(oconfig_item_t *ci, wb_callback_t *cb,
-        data_t *data, auth_data_t *auth_data)
+        data_t *data, auth_data_t *auth_data, char** tenantid)
 {
 	if (strcasecmp("URL", ci->key) == 0)
 	{
@@ -852,7 +855,7 @@ static void config_get_url_params(oconfig_item_t *ci, wb_callback_t *cb,
 		{
 			oconfig_item_t *child = ci->children + i;
 			if (strcasecmp(CONF_TENANTID, child->key) == 0)
-				cf_util_get_string(child, &data->tenantid);
+				cf_util_get_string(child, tenantid);
 			else if (strcasecmp(CONF_TTL, child->key) == 0)
 				cf_util_get_int(child, &cb->ttl);
 			else if (strcasecmp(CONF_AUTH_URL, child->key) == 0)
@@ -873,8 +876,10 @@ static int wb_config_url(oconfig_item_t *ci)
 {
 	data_t data;
 	auth_data_t auth_data;
+	char *tenantid = NULL;
 	memset(&data, '\0', sizeof(data_t));
 	memset(&auth_data, '\0', sizeof(auth_data_t));
+	data.ingest_url = (char *) malloc(MAX_URL_SIZE);
 
 	wb_callback_t *cb;
 	user_data_t user_data;
@@ -888,12 +893,23 @@ static int wb_config_url(oconfig_item_t *ci)
 
 	pthread_mutex_init(&cb->send_lock, /* attr = */NULL);
 
-	config_get_url_params(ci, cb, &data, &auth_data);
+	config_get_url_params(ci, cb, &data, &auth_data, &tenantid);
 	CHECK_OPTIONAL_PARAM(auth_data.auth_url, CONF_AUTH_URL, CONF_URL);
 	CHECK_OPTIONAL_PARAM(auth_data.user, CONF_AUTH_USER, CONF_AUTH_URL);
 	CHECK_OPTIONAL_PARAM(auth_data.pass, CONF_AUTH_PASSORD, CONF_AUTH_URL);
-	CHECK_OPTIONAL_PARAM(data.tenantid, CONF_TENANTID, CONF_URL);
+	CHECK_OPTIONAL_PARAM(tenantid, CONF_TENANTID, CONF_URL);
 	CHECK_MANDATORY_PARAM(data.url, CONF_URL);
+
+	if (tenantid != NULL)
+	{
+		blueflood_get_ingest_url(data.ingest_url, data.url, tenantid);
+	}
+	else if (auth_data.auth_url == NULL)
+	{
+		ERROR("%s plugin: either %s or %s (or both) should be present in config",
+				PLUGIN_NAME, CONF_AUTH_URL, CONF_TENANTID);
+		return -1;
+	}
 
 	s_blueflood_transport = blueflood_curl_transport_alloc(&data, &auth_data);
 	if (s_blueflood_transport == NULL)
@@ -904,6 +920,7 @@ static int wb_config_url(oconfig_item_t *ci)
 	}
 
 	/* Allocate json generator */
+	cb->yajl_gen = NULL;
 	if (jsongen_init(&cb->yajl_gen) != 0)
 	{
 		free_user_data(cb);
