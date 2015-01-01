@@ -638,7 +638,6 @@ static yajl_gen_status gen_metricvalue_kv(yajl_gen gen, int type, const value_t 
 	int value_int;
 	yajl_gen_status status=yajl_gen_status_ok;
 	/*do not check yajl status for plain string*/
-	INFO("type=%d", type);
 	yajl_gen_string(gen, (const unsigned char *)STR_VALUE, strlen(STR_VALUE));
 	switch(type)
 	{
