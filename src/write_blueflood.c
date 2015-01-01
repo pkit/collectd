@@ -153,7 +153,6 @@ typedef struct auth_data_s
 	char *user;
 	char *pass;
 	char *token;
-	char *tenantid;
 } auth_data_t;
 static void free_auth_data(auth_data_t *auth_data);
 
@@ -188,6 +187,7 @@ struct MemoryStruct
 
 static void update_ingest_url(const char *tenant, const char *url, char **ingest_url)
 {
+	if (tenant==NULL || url==NULL) return;
 	free(*ingest_url);
 	*ingest_url = (char *) malloc(MAX_URL_SIZE);
 	snprintf(*ingest_url, MAX_URL_SIZE, s_blueflood_ingest_url_template, url, tenant);
@@ -204,7 +204,6 @@ static void free_auth_data(auth_data_t *auth_data)
 	sfree(auth_data->user);
 	sfree(auth_data->pass);
 	sfree(auth_data->token);
-	sfree(auth_data->tenantid);
 }
 
 static int metric_format_name(char *ret, int ret_len, const char *hostname,
@@ -347,8 +346,6 @@ static int auth(struct blueflood_curl_transport_t *transport, auth_data_t *auth_
 	struct curl_slist *headers = NULL;
 	const char* token_xpath[] =
 	{ "access", "token", "id", (const char*) 0 };
-	const char* tenant_xpath[] =
-	{ "access", "token", "tenant", "id", (const char*) 0 };
 
 	/* prepare data for callback */
 	chunk.memory = malloc(WRITE_HTTP_DEFAULT_BUFFER_SIZE);
@@ -366,16 +363,9 @@ static int auth(struct blueflood_curl_transport_t *transport, auth_data_t *auth_
 		{
 			sfree(auth_data->token);
 			auth_data->token = json_get_key_alloc(token_xpath, chunk.memory);
-			sfree(auth_data->tenantid);
-			auth_data->tenantid = json_get_key_alloc(tenant_xpath, chunk.memory);
 			if (!auth_data->token)
 			{
 				ERROR("%s plugin: Bad token returned", PLUGIN_NAME);
-				res = -1;
-			}
-			if (!auth_data->tenantid)
-			{
-				ERROR("%s plugin: Bad tenantdId returned", PLUGIN_NAME);
 				res = -1;
 			}
 		}
@@ -536,9 +526,8 @@ static int send_json(yajl_gen *gen)
 	while (request_err == 0 && max_attempts_count-- > 0 && success != 0)
 	{
 		/* if running auth for the first time, get auth token */
-		if (transport->auth_data.auth_url != NULL
-		    && (transport->auth_data.token == NULL
-		        || transport->auth_data.tenantid == NULL))
+		if ( transport->auth_data.auth_url != NULL &&
+		     transport->auth_data.token == NULL )
 		{
 			request_err = auth(transport, &transport->auth_data);
 			if (request_err)
@@ -910,6 +899,7 @@ static void config_get_auth_params(oconfig_item_t *child, wb_callback_t *cb,
 static int config_get_url_params(oconfig_item_t *ci, wb_callback_t *cb,
         data_t *data, auth_data_t *auth_data)
 {
+	char *tenant = NULL;
 	int auth_specified=0;
 	if (strcasecmp("URL", ci->key) == 0)
 	{
@@ -921,9 +911,12 @@ static int config_get_url_params(oconfig_item_t *ci, wb_callback_t *cb,
 			oconfig_item_t *child = ci->children + i;
 			if (strcasecmp(CONF_TENANTID, child->key) == 0)
 			{
-				cf_util_get_string(child, &auth_data->tenantid);
+				cf_util_get_string(child, &tenant);
 				/*immediately update ingest_url*/
-				update_ingest_url(auth_data->tenantid, data->url, &data->ingest_url);
+				update_ingest_url(tenant, data->url, &data->ingest_url);
+				/*do not assign NULL after freeing to
+				  check later parameter availability*/
+				free(tenant);
 			}
 			else if (strcasecmp(CONF_TTL, child->key) == 0)
 				cf_util_get_int(child, &cb->ttl);
@@ -956,7 +949,7 @@ static int config_get_url_params(oconfig_item_t *ci, wb_callback_t *cb,
 		CHECK_OPTIONAL_PARAM(auth_data->pass, CONF_AUTH_PASSORD, CONF_AUTH_URL);
 	}
 	CHECK_MANDATORY_PARAM(data->url, CONF_URL);
-	CHECK_MANDATORY_PARAM(auth_data->tenantid, CONF_TENANTID);
+	CHECK_MANDATORY_PARAM(tenant, CONF_TENANTID);
 	return 0;
 }
 
